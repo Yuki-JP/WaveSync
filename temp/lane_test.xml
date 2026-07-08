@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmeml version="4">
+  <project>
+    <name>Timeline Sincronizada</name>
+    <children>
+      <sequence id="sequence-1">
+        <name>Timeline Sincronizada</name>
+        <rate>
+          <timebase>24</timebase>
+          <ntsc>TRUE</ntsc>
+        </rate>
+        <duration>744</duration>
+        <timecode>
+          <rate>
+            <timebase>24</timebase>
+            <ntsc>TRUE</ntsc>
+          </rate>
+          <string>00:00:00:00</string>
+          <frame>0</frame>
+          <displayformat>NDF</displayformat>
+        </timecode>
+        <media>
+          <video>
+            <track>
+              <clipitem id="video-clip-1">
+                <name>A.MP4</name>
+                <duration>240</duration>
+                <rate>
+                  <timebase>24</timebase>
+                  <ntsc>TRUE</ntsc>
+                </rate>
+                <start>0</start>
+                <end>240</end>
+                <in>0</in>
+                <out>240</out>
+                <file id="file-video-1">
+                  <name>A.MP4</name>
+                  <pathurl>file://localhost/E:/Cam/A.MP4</pathurl>
+                  <rate>
+                    <timebase>24</timebase>
+                    <ntsc>TRUE</ntsc>
+                  </rate>
+                  <duration>240</duration>
+                  <media>
+                    <video/>
+                  </media>
+                </file>
+              </clipitem>
+              <clipitem id="video-clip-2">
+                <name>B.MP4</name>
+                <duration>120</duration>
+                <rate>
+                  <timebase>24</timebase>
+                  <ntsc>TRUE</ntsc>
+                </rate>
+                <start>72</start>
+                <end>192</end>
+                <in>0</in>
+                <out>120</out>
+                <file id="file-video-2">
+                  <name>B.MP4</name>
+                  <pathurl>file://localhost/E:/Cam/B.MP4</pathurl>
+                  <rate>
+                    <timebase>24</timebase>
+                    <ntsc>TRUE</ntsc>
+                  </rate>
+                  <duration>120</duration>
+                  <media>
+                    <video/>
+                  </media>
+                </file>
+              </clipitem>
+            </track>
+          </video>
+          <audio>
+            <track>
+              <clipitem id="audio-clip-1">
+                <name>A.MP4</name>
+                <duration>240</duration>
+                <rate>
+                  <timebase>24</timebase>
+                  <ntsc>TRUE</ntsc>
+                </rate>
+                <start>0</start>
+                <end>240</end>
+                <in>0</in>
+                <out>240</out>
+                <file id="file-audio-1">
+                  <name>A.MP4</name>
+                  <pathurl>file://localhost/E:/Cam/A.MP4</pathurl>
+                  <rate>
+                    <timebase>24</timebase>
+                    <ntsc>TRUE</ntsc>
+                  </rate>
+                  <duration>240</duration>
+                  <media>
+                    <audio/>
+                  </media>
+                </file>
+              </clipitem>
+              <clipitem id="audio-clip-2">
+                <name>B.MP4</name>
+                <duration>120</duration>
+                <rate>
+                  <timebase>24</timebase>
+                  <ntsc>TRUE</ntsc>
+                </rate>
+                <start>72</start>
+                <end>192</end>
+                <in>0</in>
+                <out>120</out>
+                <file id="file-audio-2">
+                  <name>B.MP4</name>
+                  <pathurl>file://localhost/E:/Cam/B.MP4</pathurl>
+                  <rate>
+                    <timebase>24</timebase>
+                    <ntsc>TRUE</ntsc>
+                  </rate>
+                  <duration>120</duration>
+                  <media>
+                    <audio/>
+                  </media>
+                </file>
+              </clipitem>
+            </track>
+            <track>
+              <clipitem id="audio-reference-clip-1">
+                <name>LAPELA.WAV</name>
+                <duration>720</duration>
+                <rate>
+                  <timebase>24</timebase>
+                  <ntsc>TRUE</ntsc>
+                </rate>
+                <start>24</start>
+                <end>744</end>
+                <in>0</in>
+                <out>720</out>
+                <file id="file-reference-audio-1">
+                  <name>LAPELA.WAV</name>
+                  <pathurl>file://localhost/E:/Audio/LAPELA.WAV</pathurl>
+                  <rate>
+                    <timebase>24</timebase>
+                    <ntsc>TRUE</ntsc>
+                  </rate>
+                  <duration>720</duration>
+                  <media>
+                    <audio/>
+                  </media>
+                </file>
+              </clipitem>
+            </track>
+          </audio>
+        </media>
+      </sequence>
+    </children>
+  </project>
+</xmeml>
