@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "name": "casamento_juliana_caue_teste_limpo",
+  "source_audit": "C:\\Users\\Usuário\\Desktop\\Gustavo\\PluralEyes\\output\\teste juliana e caue\\casamento_juliana_caue_teste_limpo_audit.json",
+  "expected": {
+    "reference_count": 4,
+    "success_count": 9,
+    "failure_count": 0,
+    "track_overlap_count": 0,
+    "reference_cache_hit_features_count": 4,
+    "target_cache_hit_features_count": 9,
+    "master_reference_name": "Lapela 01",
+    "master_reference_track_name": "Lapela 01",
+    "reference_match_scope": "all_references_master_unified",
+    "use_camera_clock_model": true,
+    "spanning_continuity_adjustment_count": 2
+  },
+  "camera_track_order": {
+    "CAM 01 - A7IV - VICTOR": [
+      "A7IV_20260307_9306.MP4",
+      "A7IV_20260307_9307.MP4",
+      "A7IV_20260307_9308.MP4",
+      "A7IV_20260307_9309.MP4",
+      "A7IV_20260307_9310.MP4"
+    ],
+    "CAM 02 - ZVE10 - KAIKY": [
+      "ZVE10_02_20260307_9180.MP4",
+      "ZVE10_02_20260307_9181.MP4",
+      "ZVE10_02_20260307_9182.MP4",
+      "ZVE10_02_20260307_9183.MP4"
+    ]
+  },
+  "clips": [
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 01 - A7IV - VICTOR\\A7IV_20260307_9306.MP4",
+      "file_name": "A7IV_20260307_9306.MP4",
+      "camera_name": "CAM 01 - A7IV - VICTOR",
+      "offset_seconds": 751.8839002267573,
+      "duration_seconds": 806.8059863945579,
+      "timeline_end_seconds": 1558.689886621315
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 01 - A7IV - VICTOR\\A7IV_20260307_9307.MP4",
+      "file_name": "A7IV_20260307_9307.MP4",
+      "camera_name": "CAM 01 - A7IV - VICTOR",
+      "offset_seconds": 1561.4485260770975,
+      "duration_seconds": 44.544489795918366,
+      "timeline_end_seconds": 1605.9930158730158
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 01 - A7IV - VICTOR\\A7IV_20260307_9308.MP4",
+      "file_name": "A7IV_20260307_9308.MP4",
+      "camera_name": "CAM 01 - A7IV - VICTOR",
+      "offset_seconds": 1607.7850340136056,
+      "duration_seconds": 503.50303854875284,
+      "timeline_end_seconds": 2111.2880725623586
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 01 - A7IV - VICTOR\\A7IV_20260307_9309.MP4",
+      "file_name": "A7IV_20260307_9309.MP4",
+      "camera_name": "CAM 01 - A7IV - VICTOR",
+      "offset_seconds": 2114.4734693877554,
+      "duration_seconds": 196.1960090702948,
+      "timeline_end_seconds": 2310.66947845805
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 01 - A7IV - VICTOR\\A7IV_20260307_9310.MP4",
+      "file_name": "A7IV_20260307_9310.MP4",
+      "camera_name": "CAM 01 - A7IV - VICTOR",
+      "offset_seconds": 2313.278911564626,
+      "duration_seconds": 519.0185034013606,
+      "timeline_end_seconds": 2832.2974149659867
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 02 - ZVE10 - KAIKY\\ZVE10_02_20260307_9180.MP4",
+      "file_name": "ZVE10_02_20260307_9180.MP4",
+      "camera_name": "CAM 02 - ZVE10 - KAIKY",
+      "offset_seconds": 754.5718820861678,
+      "duration_seconds": 317.82004535147394,
+      "timeline_end_seconds": 1072.3919274376417
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 02 - ZVE10 - KAIKY\\ZVE10_02_20260307_9181.MP4",
+      "file_name": "ZVE10_02_20260307_9181.MP4",
+      "camera_name": "CAM 02 - ZVE10 - KAIKY",
+      "offset_seconds": 1120.4063492063492,
+      "duration_seconds": 896.4,
+      "timeline_end_seconds": 2016.8063492063493
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 02 - ZVE10 - KAIKY\\ZVE10_02_20260307_9182.MP4",
+      "file_name": "ZVE10_02_20260307_9182.MP4",
+      "camera_name": "CAM 02 - ZVE10 - KAIKY",
+      "offset_seconds": 2053.08843537415,
+      "duration_seconds": 420.9249886621315,
+      "timeline_end_seconds": 2474.0134240362813
+    },
+    {
+      "path": "D:\\2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo\\01 CAMERAS\\CAM 02 - ZVE10 - KAIKY\\ZVE10_02_20260307_9183.MP4",
+      "file_name": "ZVE10_02_20260307_9183.MP4",
+      "camera_name": "CAM 02 - ZVE10 - KAIKY",
+      "offset_seconds": 2476.1079365079368,
+      "duration_seconds": 14.015056689342403,
+      "timeline_end_seconds": 2490.1229931972794
+    }
+  ]
+}

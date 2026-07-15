@@ -85,10 +85,22 @@ python tools\sync_from_selection.py --selection "selections\casamento_soho_selec
 
 ## Regressao
 
-Antes de mexer no motor de sync, rode:
+Antes de mexer no motor de sync, rode todos os baselines validados:
 
 ```powershell
 python tools\run_regression.py
+```
+
+Hoje esse comando valida:
+
+- `soho`
+- `juliana-caue`
+
+Para rodar apenas um caso:
+
+```powershell
+python tools\run_regression.py --case soho
+python tools\run_regression.py --case juliana-caue
 ```
 
 Modo rapido, sem reprocessar:

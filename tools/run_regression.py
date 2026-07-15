@@ -1,8 +1,8 @@
-"""Run the known-good sync regression from config to golden validation.
+"""Run known-good sync regressions from config to golden validation.
 
-Default flow:
-  1. python main.py --config configs/casamento_soho_trackcheck.json
-  2. python tools/validate_golden.py
+Default flow runs every official baseline:
+  1. python main.py --config <baseline config>
+  2. python tools/validate_golden.py --audit <baseline audit> --golden <baseline golden>
 """
 
 from __future__ import annotations
@@ -11,23 +11,75 @@ import argparse
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "casamento_soho_trackcheck.json"
 VALIDATOR_SCRIPT = PROJECT_ROOT / "tools" / "validate_golden.py"
 MAIN_SCRIPT = PROJECT_ROOT / "main.py"
 
 
+@dataclass(frozen=True)
+class RegressionCase:
+    name: str
+    config: Path
+    audit: Path
+    golden: Path
+
+
+REGRESSION_CASES = {
+    "soho": RegressionCase(
+        name="soho",
+        config=PROJECT_ROOT / "configs" / "casamento_soho_trackcheck.json",
+        audit=(
+            PROJECT_ROOT
+            / "output"
+            / "teste debora e lucas"
+            / "casamento_soho_trackcheck_audit.json"
+        ),
+        golden=PROJECT_ROOT / "golden" / "casamento_soho_trackcheck_golden.json",
+    ),
+    "juliana-caue": RegressionCase(
+        name="juliana-caue",
+        config=PROJECT_ROOT / "configs" / "casamento_juliana_caue_teste_limpo.json",
+        audit=(
+            PROJECT_ROOT
+            / "output"
+            / "teste juliana e caue"
+            / "casamento_juliana_caue_teste_limpo_audit.json"
+        ),
+        golden=PROJECT_ROOT
+        / "golden"
+        / "casamento_juliana_caue_teste_limpo_golden.json",
+    ),
+}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Executa o teste de regressao do sync multicamera funcional."
+        description="Executa testes de regressao do sync multicamera funcional."
+    )
+    parser.add_argument(
+        "--case",
+        action="append",
+        choices=sorted(REGRESSION_CASES),
+        help="Baseline oficial a executar. Pode ser repetido. Padrao: todos.",
     )
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_CONFIG),
-        help=f"Preset JSON usado no teste. Padrao: {DEFAULT_CONFIG}",
+        default=None,
+        help="Preset JSON manual. Quando usado, executa apenas este config.",
+    )
+    parser.add_argument(
+        "--audit",
+        default=None,
+        help="Audit JSON esperado para validacao do config manual.",
+    )
+    parser.add_argument(
+        "--golden",
+        default=None,
+        help="Golden JSON esperado para validacao do config manual.",
     )
     parser.add_argument(
         "--python",
@@ -63,6 +115,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Timeout por etapa em segundos. Padrao: sem timeout.",
     )
     return parser.parse_args(argv)
+
+
+def selected_cases(args: argparse.Namespace) -> list[RegressionCase]:
+    if args.config:
+        return [
+            RegressionCase(
+                name="manual",
+                config=Path(args.config).expanduser().resolve(),
+                audit=(
+                    Path(args.audit).expanduser().resolve()
+                    if args.audit
+                    else REGRESSION_CASES["soho"].audit
+                ),
+                golden=(
+                    Path(args.golden).expanduser().resolve()
+                    if args.golden
+                    else REGRESSION_CASES["soho"].golden
+                ),
+            )
+        ]
+
+    names = args.case or list(REGRESSION_CASES)
+    return [REGRESSION_CASES[name] for name in names]
 
 
 def ensure_file(path: Path, label: str) -> None:
@@ -120,8 +195,19 @@ def build_sync_command(args: argparse.Namespace, config_path: Path) -> list[str]
     ]
 
 
-def build_validation_command(args: argparse.Namespace) -> list[str]:
-    command = [args.python, str(VALIDATOR_SCRIPT)]
+def build_validation_command(
+    args: argparse.Namespace,
+    audit_path: Path,
+    golden_path: Path,
+) -> list[str]:
+    command = [
+        args.python,
+        str(VALIDATOR_SCRIPT),
+        "--audit",
+        str(audit_path),
+        "--golden",
+        str(golden_path),
+    ]
     if args.allow_cold_cache:
         command.append("--allow-cold-cache")
     if args.offset_tolerance is not None:
@@ -133,40 +219,53 @@ def build_validation_command(args: argparse.Namespace) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    config_path = Path(args.config).expanduser().resolve()
     python_path = Path(args.python).expanduser()
+    cases = selected_cases(args)
 
     try:
         ensure_file(MAIN_SCRIPT, "main.py")
         ensure_file(VALIDATOR_SCRIPT, "validate_golden.py")
-        ensure_file(config_path, "Config de regressao")
         if not python_path.exists():
             raise FileNotFoundError(f"Python nao encontrado: {python_path}")
+        for case in cases:
+            ensure_file(case.config, f"Config de regressao ({case.name})")
+            if args.validate_only:
+                ensure_file(case.audit, f"Audit de regressao ({case.name})")
+            ensure_file(case.golden, f"Golden de regressao ({case.name})")
 
         emit("[REGRESSION] PluralEyes clone - baseline multicamera funcional")
         emit(f"[REGRESSION] Projeto : {PROJECT_ROOT}")
-        emit(f"[REGRESSION] Config  : {config_path}")
+        emit("[REGRESSION] Casos   : " + ", ".join(case.name for case in cases))
 
         overall_start = time.perf_counter()
 
-        if not args.validate_only:
-            sync_code = run_step(
-                "Etapa 1/2 - Gerar XML/audit pelo preset golden",
-                build_sync_command(args, config_path),
-                args.timeout,
-            )
-            if sync_code != 0:
-                return sync_code
-        else:
+        if args.validate_only:
             emit("[REGRESSION] Modo validate-only: sync nao sera executado.")
 
-        validation_code = run_step(
-            "Etapa 2/2 - Validar audit contra golden",
-            build_validation_command(args),
-            args.timeout,
-        )
-        if validation_code != 0:
-            return validation_code
+        for index, case in enumerate(cases, start=1):
+            emit("")
+            emit("-" * 72)
+            emit(f"[REGRESSION] Caso {index}/{len(cases)}: {case.name}")
+            emit(f"[REGRESSION] Config : {case.config}")
+            emit(f"[REGRESSION] Audit  : {case.audit}")
+            emit(f"[REGRESSION] Golden : {case.golden}")
+
+            if not args.validate_only:
+                sync_code = run_step(
+                    f"{case.name} - Gerar XML/audit pelo preset golden",
+                    build_sync_command(args, case.config),
+                    args.timeout,
+                )
+                if sync_code != 0:
+                    return sync_code
+
+            validation_code = run_step(
+                f"{case.name} - Validar audit contra golden",
+                build_validation_command(args, case.audit, case.golden),
+                args.timeout,
+            )
+            if validation_code != 0:
+                return validation_code
 
         elapsed = time.perf_counter() - overall_start
         emit("")

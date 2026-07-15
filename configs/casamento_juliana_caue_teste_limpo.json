@@ -1,0 +1,30 @@
+{
+  "ignore_metadata": true,
+  "use_camera_clock_model": true,
+  "output": "output/teste juliana e caue/casamento_juliana_caue_teste_limpo.xml",
+  "references": {
+    "lapela_01_dji_mic_verde": [
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/02 AUDIOS/LAPELA 01 - DJI MIC - VERDE/DJI_01_20260307_162306.WAV",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/02 AUDIOS/LAPELA 01 - DJI MIC - VERDE/DJI_02_20260307_165411.WAV"
+    ],
+    "lapela_02_dji_mic_verde": [
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/02 AUDIOS/LAPELA 02 - DJI MIC - VERDE/DJI_02_20260307_162308.WAV",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/02 AUDIOS/LAPELA 02 - DJI MIC - VERDE/DJI_03_20260307_165413.WAV"
+    ]
+  },
+  "targets": {
+    "cam_01_a7iv_victor": [
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260307_9306.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260307_9307.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260307_9308.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260307_9309.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260307_9310.MP4"
+    ],
+    "cam_02_zve10_kaiky": [
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 02 - ZVE10 - KAIKY/ZVE10_02_20260307_9180.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 02 - ZVE10 - KAIKY/ZVE10_02_20260307_9181.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 02 - ZVE10 - KAIKY/ZVE10_02_20260307_9182.MP4",
+      "D:/2026-03-07 - Casamento - Juliana e Caue - Espaço Jardim - Sao Paulo/01 CAMERAS/CAM 02 - ZVE10 - KAIKY/ZVE10_02_20260307_9183.MP4"
+    ]
+  }
+}

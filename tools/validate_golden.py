@@ -130,6 +130,7 @@ def build_golden_payload(audit: dict[str, Any], source_audit: Path) -> dict[str,
     successful = ok_rows(audit)
     failed = failed_rows(audit)
     clips = []
+    baseline_name = source_audit.stem.removesuffix("_audit")
 
     for row in sorted(successful, key=lambda item: str(item.get("path") or "")):
         clips.append(
@@ -145,7 +146,7 @@ def build_golden_payload(audit: dict[str, Any], source_audit: Path) -> dict[str,
 
     return {
         "schema_version": 1,
-        "name": "casamento_soho_trackcheck",
+        "name": baseline_name,
         "source_audit": str(source_audit),
         "expected": {
             "reference_count": int(metadata.get("reference_count") or 0),
