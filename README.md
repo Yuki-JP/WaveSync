@@ -51,7 +51,16 @@ TUTORIAL_USUARIO.md
 
 ### Interface Tkinter
 
-Se a pessoa baixar o repositorio e tiver Python 3.9+ instalado, basta abrir:
+Em uma maquina nova, primeiro rode:
+
+```text
+Instalar_Python39_E_Dependencias.bat
+```
+
+Esse script instala Python 3.9, cria o ambiente local `.venv/`, instala as
+dependencias de `requirements.txt` e abre a interface.
+
+Se a pessoa ja tiver Python 3.9+ instalado, tambem pode abrir manualmente:
 
 ```text
 python tkinter_app.py

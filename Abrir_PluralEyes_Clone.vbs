@@ -13,7 +13,7 @@ command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden
     "elseif (Test-Path $python) { Start-Process -WindowStyle Hidden -FilePath $python -ArgumentList 'tkinter_app.py' -WorkingDirectory (Get-Location) } " & _
     "elseif (Get-Command py -ErrorAction SilentlyContinue) { Start-Process -WindowStyle Hidden -FilePath 'py' -ArgumentList '-3','tools\bootstrap.py' -WorkingDirectory (Get-Location) } " & _
     "elseif (Get-Command python -ErrorAction SilentlyContinue) { Start-Process -WindowStyle Hidden -FilePath 'python' -ArgumentList 'tools\bootstrap.py' -WorkingDirectory (Get-Location) } " & _
-    "else { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Python nao encontrado. Instale Python 3.9 ou superior e rode novamente.','PluralEyes Clone',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null }" & _
+    "else { $installer='.\Instalar_Python39_E_Dependencias.bat'; if (Test-Path $installer) { Start-Process -FilePath $installer -WorkingDirectory (Get-Location) } else { Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Python nao encontrado. Rode Instalar_Python39_E_Dependencias.bat.','PluralEyes Clone',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null } }" & _
     Chr(34)
 
 shell.Run command, 0, False

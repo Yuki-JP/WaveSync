@@ -31,9 +31,23 @@ C:\PluralEyes
 
 Importante: nao rode a ferramenta direto de dentro do `.zip`. Primeiro extraia.
 
-## 3. Instalar O Python
+## 3. Instalar O Python E As Dependencias
 
-Se o computador ja tiver Python instalado, pode pular esta parte.
+Dentro da pasta extraida do projeto, abra este arquivo:
+
+```text
+Instalar_Python39_E_Dependencias.bat
+```
+
+Ele vai:
+
+1. verificar se o Python 3.9 ja existe;
+2. baixar e instalar Python 3.9 se estiver faltando;
+3. criar o ambiente local `.venv`;
+4. instalar as dependencias do projeto;
+5. abrir a interface.
+
+Se preferir instalar Python manualmente:
 
 1. Abra o navegador.
 2. Entre em:
@@ -47,6 +61,8 @@ https://www.python.org/downloads/
 5. Marque a opcao `Add python.exe to PATH`.
 6. Clique em `Install Now`.
 7. Espere terminar.
+8. Depois rode `Instalar_Python39_E_Dependencias.bat` para instalar as
+   dependencias.
 
 ## 4. Abrir A Ferramenta
 
@@ -184,7 +200,7 @@ python tkinter_app.py
 1. Entrar em https://github.com/Yuki-JP/PluralEyes
 2. Code > Download ZIP
 3. Extrair o ZIP
-4. Instalar Python 3.9+
+4. Rodar Instalar_Python39_E_Dependencias.bat
 5. Abrir Abrir_PluralEyes_Clone.vbs
 6. Selecionar audios
 7. Selecionar videos

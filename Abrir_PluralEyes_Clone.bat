@@ -21,8 +21,7 @@ if %ERRORLEVEL%==0 (
 
 echo.
 echo Python nao encontrado.
-echo Instale Python 3.9 ou superior em https://www.python.org/downloads/
-echo Depois rode este arquivo novamente.
+echo Abrindo instalador automatico de Python 3.9 e dependencias...
 echo.
-pause
-exit /b 1
+call "%~dp0Instalar_Python39_E_Dependencias.bat"
+exit /b %ERRORLEVEL%
