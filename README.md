@@ -166,6 +166,7 @@ Liste exatamente os arquivos escolhidos pelo usuario em `reference_groups` e
   },
   "ignore_metadata": true,
   "use_camera_clock_model": true,
+  "explicit_selection": true,
   "output": "output/casamento_exemplo.xml"
 }
 ```
@@ -213,6 +214,8 @@ Campos principais:
 - `target_range`: ranges inclusivos de videos no modo por pasta.
 - `ignore_metadata`: normalmente `true` para casamentos com relogios desalinhados.
 - `use_camera_clock_model`: normalmente `true`.
+- `explicit_selection`: `true` quando o usuario escolheu os arquivos manualmente.
+  Nesse modo, o sync nao descarta clipes pela trava de mtime entre cameras e audios.
 - `output`: XML final.
 
 ## Arquivos Que Nao Devem Ser Commitados

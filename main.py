@@ -66,6 +66,8 @@ CAMERA_CLOCK_MAX_ABS_DRIFT_PPM = 5_000.0
 CAMERA_LOCAL_REFINE_WINDOW_SECONDS = 3.0
 CAMERA_LOCAL_REFINE_MAX_DELTA_SECONDS = 1.5
 CAMERA_LOCAL_REFINE_MIN_Z_SCORE = 4.0
+CAMERA_LOCAL_REFINE_STRONG_Z_SCORE = 8.0
+CAMERA_LOCAL_REFINE_STRONG_PROMINENCE = 2.0
 CAMERA_POST_CUT_NATIVE_LATE_THRESHOLD_SECONDS = 0.35
 CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS = 120.0
 CAMERA_PEER_REFINE_WINDOW_SECONDS = 8.0
@@ -435,7 +437,7 @@ def config_value(
     *config_keys: str,
     default: object = None,
 ) -> object:
-    cli_value = getattr(args, attr_name)
+    cli_value = getattr(args, attr_name, None)
     if cli_value is not None:
         return cli_value
     for key in config_keys:
@@ -520,6 +522,18 @@ def apply_project_config(args: argparse.Namespace) -> argparse.Namespace:
             "use_camera_clock_model",
             "use_camera_clock_model",
             "useCameraClockModel",
+            default=False,
+        )
+    )
+    args.explicit_selection = bool(
+        config_value(
+            args,
+            config,
+            "explicit_selection",
+            "explicit_selection",
+            "explicitSelection",
+            "selected_files_only",
+            "selectedFilesOnly",
             default=False,
         )
     )
@@ -1456,6 +1470,7 @@ def sync_multiple_tracks_hybrid(
     camera_global_offset_seconds: float = 0.0,
     camera_offset_seconds_by_name: dict[str, float] | None = None,
     use_camera_clock_model: bool = False,
+    explicit_selection: bool = False,
 ) -> dict:
     if ignore_metadata:
         logger.warning(
@@ -1511,6 +1526,8 @@ def sync_multiple_tracks_hybrid(
             "camera_peer_refine_min_overlap_seconds": CAMERA_PEER_REFINE_MIN_OVERLAP_SECONDS,
             "camera_audio_source": "embedded_mp4",
             "camera_audio_uses_extracted_wav": False,
+            "explicit_selection": explicit_selection,
+            "mtime_safety_gate_enabled": not explicit_selection,
             "sync_mode": (
                 "ignore_metadata_full_scan_transient_correlation"
                 if ignore_metadata
@@ -1534,7 +1551,7 @@ def sync_multiple_tracks_hybrid(
     matches: list[ClipSyncMatch] = []
     for index, clip in enumerate(prepared_clips, start=1):
         try:
-            if ignore_metadata:
+            if ignore_metadata and not explicit_selection:
                 gap_seconds = mtime_gap_seconds(clip.path, reference_mtime_average)
                 if gap_seconds > MAX_TIME_GAP_SECONDS:
                     logger.warning(
@@ -1557,6 +1574,11 @@ def sync_multiple_tracks_hybrid(
                         },
                     )
                     continue
+            elif ignore_metadata and explicit_selection and index == 1:
+                logger.warning(
+                    "Selecao explicita ativa: trava de incompatibilidade por mtime "
+                    "desabilitada para preservar os arquivos escolhidos pelo usuario."
+                )
 
             target_features = clip.features
 
@@ -1992,6 +2014,7 @@ def build_camera_block_placements(
                         previous_final_end_seconds=previous_final_end,
                         previous_duration_seconds=previous_duration_seconds,
                         native_gap_from_previous_seconds=timing["gap_from_previous"],
+                        local_refinement=local_refinement,
                     )
                 )
                 if use_native_post_cut:
@@ -2666,6 +2689,7 @@ def should_use_native_post_cut_prediction(
     previous_final_end_seconds: float | None,
     previous_duration_seconds: float | None,
     native_gap_from_previous_seconds: float | None,
+    local_refinement: LocalCameraRefinement | None = None,
 ) -> tuple[bool, str]:
     if previous_final_end_seconds is None:
         return False, "primeiro_clipe_da_camera"
@@ -2678,6 +2702,19 @@ def should_use_native_post_cut_prediction(
         )
     if native_gap_from_previous_seconds is None:
         return False, "gap_nativo_indisponivel"
+
+    if (
+        local_refinement is not None
+        and local_refinement.result.z_score >= CAMERA_LOCAL_REFINE_STRONG_Z_SCORE
+        and local_refinement.result.prominence_ratio
+        >= CAMERA_LOCAL_REFINE_STRONG_PROMINENCE
+    ):
+        return (
+            False,
+            "refino_local_forte_preservado:"
+            f"z={local_refinement.result.z_score:.2f};"
+            f"prom={local_refinement.result.prominence_ratio:.3f}",
+        )
 
     late_delta = final_offset_seconds - native_predicted_offset_seconds
     if late_delta < CAMERA_POST_CUT_NATIVE_LATE_THRESHOLD_SECONDS:
@@ -3557,6 +3594,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         camera_global_offset_seconds=args.camera_global_offset,
         camera_offset_seconds_by_name=camera_offset_seconds_by_name,
         use_camera_clock_model=args.use_camera_clock_model,
+        explicit_selection=args.explicit_selection,
     )
     if args.project_config_path:
         sync_results.setdefault("metadata", {})["project_config_path"] = args.project_config_path

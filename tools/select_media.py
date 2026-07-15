@@ -258,6 +258,7 @@ def build_payload_from_config(args: argparse.Namespace) -> dict:
         "use_camera_clock_model": bool(
             config.get("use_camera_clock_model", not args.no_clock_model)
         ),
+        "explicit_selection": True,
         "output": xml_output,
     }
 
@@ -285,6 +286,7 @@ def build_payload_interactive(args: argparse.Namespace) -> dict:
         "target_groups": targets,
         "ignore_metadata": not args.use_metadata,
         "use_camera_clock_model": not args.no_clock_model,
+        "explicit_selection": True,
         "output": xml_output,
     }
 
@@ -318,6 +320,7 @@ def print_summary(payload: dict, output_path: Path) -> None:
         print(f"  - {group_name}: {len(paths)}")
     print(f"Ignore metadata   : {payload.get('ignore_metadata')}")
     print(f"Clock model       : {payload.get('use_camera_clock_model')}")
+    print(f"Selecao explic.   : {payload.get('explicit_selection', False)}")
     print("=" * 72)
 
 

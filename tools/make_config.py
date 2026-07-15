@@ -843,6 +843,8 @@ def build_config(args: argparse.Namespace) -> tuple[dict, Path]:
         "references": references,
         "targets": targets,
     }
+    if args.reference_groups or args.target_groups:
+        config["explicit_selection"] = True
     if args.camera_global_offset is not None:
         config["camera_global_offset"] = args.camera_global_offset
     if args.camera_offset:
@@ -871,6 +873,7 @@ def print_summary(config: dict, config_output: Path) -> None:
         print(f"  - {group_name}: {len(items)}")
     print(f"Ignore metadata: {config.get('ignore_metadata')}")
     print(f"Clock model    : {config.get('use_camera_clock_model')}")
+    print(f"Selecao explic.: {config.get('explicit_selection', False)}")
     print("=" * 72)
 
 
