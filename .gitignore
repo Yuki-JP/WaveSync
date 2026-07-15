@@ -16,6 +16,9 @@ temp/
 # Generated exports and audit output
 output/
 
+# Local generated config experiments
+configs/*_auto.json
+
 # Local logs
 *.log
 
