@@ -30,6 +30,7 @@ configs/                Presets finais para main.py --config
 selections/             Selecoes pequenas para gerar configs
 golden/                 Baselines de regressao
 tools/make_config.py    Gera config a partir de pastas/filtros/ranges
+tools/select_media.py   Cria selection explicita por arquivos escolhidos
 tools/sync_from_selection.py
 tools/run_regression.py
 tools/validate_golden.py
@@ -39,7 +40,24 @@ output/                 XMLs/auditorias gerados, ignorado pelo Git
 
 ## Fluxo Recomendado
 
-### 1. Criar config a partir de selection
+### 1. Criar selection com os arquivos escolhidos
+
+Para montar uma selection pelo terminal:
+
+```powershell
+python tools\select_media.py
+```
+
+O script pergunta o nome do projeto, os grupos de audio/lapela e os grupos de
+camera. Em cada grupo, cole ou arraste os arquivos que devem entrar no sync.
+
+Para converter um config validado em selection explicita:
+
+```powershell
+python tools\select_media.py --from-config "configs\casamento_juliana_caue_teste_limpo.json" --dry-run
+```
+
+### 2. Criar config a partir de selection
 
 Use um arquivo em `selections/` para manter exatamente os audios e videos que devem
 entrar no sync. Esse e o fluxo recomendado para poupar tempo e evitar que arquivos
@@ -55,7 +73,7 @@ Para testar sem gravar:
 python tools\make_config.py --from-selection "selections\casamento_soho_selection.json" --dry-run
 ```
 
-### 2. Rodar sincronizacao pelo config
+### 3. Rodar sincronizacao pelo config
 
 ```powershell
 python main.py --config "configs\casamento_soho_auto.json"
@@ -70,7 +88,7 @@ TrackCheck : OK
 Cache DSP  : refs 5/5 | targets 34/34
 ```
 
-### 3. Comando unico: selection -> config -> sync
+### 4. Comando unico: selection -> config -> sync
 
 Depois que a selection estiver correta, rode tudo com um comando:
 
