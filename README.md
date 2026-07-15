@@ -41,7 +41,9 @@ output/                 XMLs/auditorias gerados, ignorado pelo Git
 
 ### 1. Criar config a partir de selection
 
-Use um arquivo em `selections/` para manter os caminhos, filtros e ranges pequenos e editaveis.
+Use um arquivo em `selections/` para manter exatamente os audios e videos que devem
+entrar no sync. Esse e o fluxo recomendado para poupar tempo e evitar que arquivos
+fora do trecho desejado entrem na timeline.
 
 ```powershell
 python tools\make_config.py --from-selection "selections\casamento_soho_selection.json"
@@ -117,7 +119,43 @@ python tools\run_regression.py --validate-only --allow-cold-cache
 
 ## Criando Uma Nova Selection
 
-Exemplo:
+### Modo recomendado: arquivos selecionados por grupo
+
+Liste exatamente os arquivos escolhidos pelo usuario em `reference_groups` e
+`target_groups`. O nome de cada grupo vira a base da organizacao do config.
+
+```json
+{
+  "name": "casamento_exemplo",
+  "reference_groups": {
+    "lapela_01": [
+      "D:/evento/02 AUDIOS/LAPELA 01/DJI_01.WAV",
+      "D:/evento/02 AUDIOS/LAPELA 01/DJI_02.WAV"
+    ],
+    "mesa_h4n": [
+      "D:/evento/02 AUDIOS/H4N/MONO-017.wav"
+    ]
+  },
+  "target_groups": {
+    "cam_01_a7iv_victor": [
+      "D:/evento/01 CAMERAS/CAM 01/A7IV_9715.MP4",
+      "D:/evento/01 CAMERAS/CAM 01/A7IV_9716.MP4"
+    ],
+    "cam_02_zve10_kenia": [
+      "D:/evento/01 CAMERAS/CAM 02/ZVE10_9450.MP4",
+      "D:/evento/01 CAMERAS/CAM 02/ZVE10_9451.MP4"
+    ]
+  },
+  "ignore_metadata": true,
+  "use_camera_clock_model": true,
+  "output": "output/casamento_exemplo.xml"
+}
+```
+
+### Atalho: pastas com filtros/ranges
+
+Quando quiser gerar uma selection rapidamente a partir de uma pasta, ainda da para
+usar filtros e ranges:
 
 ```json
 {
@@ -147,12 +185,14 @@ Exemplo:
 Campos principais:
 
 - `name`: nome do preset/config gerado.
-- `references`: arquivos ou pastas de audio.
-- `targets`: arquivos ou pastas de video.
-- `reference_filter`: substrings/globs de audios permitidos.
-- `target_filter`: substrings/globs de videos permitidos.
-- `reference_range`: ranges inclusivos de audios.
-- `target_range`: ranges inclusivos de videos.
+- `reference_groups`: audios selecionados explicitamente por lapela/mesa.
+- `target_groups`: videos selecionados explicitamente por camera.
+- `references`: arquivos ou pastas de audio, para modo por filtro/range.
+- `targets`: arquivos ou pastas de video, para modo por filtro/range.
+- `reference_filter`: substrings/globs de audios permitidos no modo por pasta.
+- `target_filter`: substrings/globs de videos permitidos no modo por pasta.
+- `reference_range`: ranges inclusivos de audios no modo por pasta.
+- `target_range`: ranges inclusivos de videos no modo por pasta.
 - `ignore_metadata`: normalmente `true` para casamentos com relogios desalinhados.
 - `use_camera_clock_model`: normalmente `true`.
 - `output`: XML final.

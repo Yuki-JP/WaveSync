@@ -203,6 +203,35 @@ def flatten_string_list(value: object, label: str) -> list[str]:
     raise ValueError(f"Valor invalido em {label}: {value!r}")
 
 
+def resolve_grouped_selection_paths(
+    value: object,
+    label: str,
+    base_dir: Path | None,
+) -> dict[str, list[str]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} deve ser um objeto com grupos nomeados.")
+
+    grouped: dict[str, list[str]] = {}
+    for raw_group_name, raw_paths in value.items():
+        group_name = str(raw_group_name).strip()
+        if not group_name:
+            raise ValueError(f"{label} contem um grupo sem nome.")
+        paths = resolve_selection_paths(raw_paths, f"{label}.{group_name}", base_dir)
+        if not paths:
+            raise ValueError(f"{label}.{group_name} nao contem arquivos.")
+        grouped[group_name] = paths
+    return grouped
+
+
+def looks_like_grouped_selection(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    path_keys = {"path", "paths", "file", "files"}
+    return not any(str(key) in path_keys for key in value)
+
+
 def selection_value(
     selection: dict,
     *keys: str,
@@ -261,13 +290,62 @@ def apply_selection(args: argparse.Namespace) -> argparse.Namespace:
     args.selection_path = str(selection_path) if selection_path else None
 
     args.name = select_cli_or_selection(args, "name", selection, "name")
+
+    selected_references_value = selection_value(selection, "references", "reference")
+    selected_targets_value = selection_value(selection, "targets", "target")
+    explicit_reference_groups = selection_value(
+        selection,
+        "reference_groups",
+        "referenceGroups",
+        "selected_references",
+        "selectedReferences",
+    )
+    explicit_target_groups = selection_value(
+        selection,
+        "target_groups",
+        "targetGroups",
+        "selected_targets",
+        "selectedTargets",
+    )
+    if explicit_reference_groups is None and looks_like_grouped_selection(
+        selected_references_value
+    ):
+        explicit_reference_groups = selected_references_value
+    if explicit_target_groups is None and looks_like_grouped_selection(selected_targets_value):
+        explicit_target_groups = selected_targets_value
+
+    cli_references_supplied = args.references not in (None, [])
+    cli_targets_supplied = args.targets not in (None, [])
+    args.reference_groups = (
+        {}
+        if cli_references_supplied
+        else resolve_grouped_selection_paths(
+            explicit_reference_groups,
+            "reference_groups",
+            selection_dir,
+        )
+    )
+    args.target_groups = (
+        {}
+        if cli_targets_supplied
+        else resolve_grouped_selection_paths(
+            explicit_target_groups,
+            "target_groups",
+            selection_dir,
+        )
+    )
+
     args.references = resolve_selection_paths(
-        select_cli_or_selection(args, "references", selection, "references", "reference"),
+        []
+        if args.reference_groups
+        else select_cli_or_selection(args, "references", selection, "references", "reference"),
         "references",
         selection_dir,
     )
     args.targets = resolve_selection_paths(
-        select_cli_or_selection(args, "targets", selection, "targets", "target"),
+        []
+        if args.target_groups
+        else select_cli_or_selection(args, "targets", selection, "targets", "target"),
         "targets",
         selection_dir,
     )
@@ -381,10 +459,14 @@ def apply_selection(args: argparse.Namespace) -> argparse.Namespace:
 
     if not args.name:
         raise ValueError("Informe --name ou use --from-selection com a chave name.")
-    if not args.references:
-        raise ValueError("Informe -r/--reference ou use --from-selection com references.")
-    if not args.targets:
-        raise ValueError("Informe -t/--targets ou use --from-selection com targets.")
+    if not args.references and not args.reference_groups:
+        raise ValueError(
+            "Informe -r/--reference ou use --from-selection com references/reference_groups."
+        )
+    if not args.targets and not args.target_groups:
+        raise ValueError(
+            "Informe -t/--targets ou use --from-selection com targets/target_groups."
+        )
 
     return args
 
@@ -604,6 +686,73 @@ def scan_media(
     return sorted(set(files), key=lambda item: (natural_path_key(item), str(item).casefold()))
 
 
+def unique_slug(raw_name: str, used: set[str]) -> str:
+    base = slugify(raw_name)
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def build_exact_media_groups(
+    groups: dict[str, list[str]],
+    *,
+    extensions: set[str],
+    include_proxies: bool = False,
+    include_drift_corrected: bool = False,
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    used_group_names: set[str] = set()
+    seen_paths: dict[Path, str] = {}
+
+    for raw_group_name, raw_paths in groups.items():
+        group_name = unique_slug(raw_group_name, used_group_names)
+        selected_paths: list[str] = []
+
+        for raw_path in raw_paths:
+            for path in expand_inputs([raw_path]):
+                resolved = path.expanduser().resolve()
+                if not resolved.exists():
+                    raise FileNotFoundError(f"Arquivo selecionado nao encontrado: {resolved}")
+                if not resolved.is_file():
+                    raise ValueError(
+                        f"Selecao explicita aceita apenas arquivos, nao pastas: {resolved}"
+                    )
+                if resolved.suffix.casefold() not in extensions:
+                    supported = ", ".join(sorted(extensions))
+                    raise ValueError(
+                        f"Arquivo selecionado tem extensao invalida: {resolved} "
+                        f"(suportadas: {supported})"
+                    )
+                if is_ignored_path(resolved):
+                    raise ValueError(f"Arquivo selecionado esta marcado como ignorado: {resolved}")
+                if not include_proxies and extensions == VIDEO_EXTENSIONS and is_proxy_file(resolved):
+                    raise ValueError(f"Proxy selecionado por engano: {resolved}")
+                if (
+                    not include_drift_corrected
+                    and extensions == AUDIO_EXTENSIONS
+                    and is_drift_corrected_file(resolved)
+                ):
+                    raise ValueError(f"Referencia drift_corrected selecionada por engano: {resolved}")
+                if resolved in seen_paths:
+                    raise ValueError(
+                        "Arquivo selecionado em mais de um grupo: "
+                        f"{resolved} ({seen_paths[resolved]} e {group_name})"
+                    )
+
+                seen_paths[resolved] = group_name
+                selected_paths.append(path_for_json(resolved))
+
+        if not selected_paths:
+            raise ValueError(f"Grupo sem arquivos validos: {raw_group_name}")
+        grouped[group_name] = selected_paths
+
+    return grouped
+
+
 def group_by_parent(files: list[Path]) -> dict[str, list[str]]:
     grouped_paths: dict[str, list[Path]] = {}
     for path in files:
@@ -646,22 +795,41 @@ def build_config(args: argparse.Namespace) -> tuple[dict, Path]:
     reference_ranges = parse_range_specs(args.reference_range)
     target_ranges = parse_range_specs(args.target_range)
 
-    references = scan_media(
-        args.references,
-        extensions=AUDIO_EXTENSIONS,
-        filters=args.reference_filter,
-        ranges=reference_ranges,
-        recursive=not args.no_recursive,
-        include_drift_corrected=args.include_drift_corrected,
-    )
-    targets = scan_media(
-        args.targets,
-        extensions=VIDEO_EXTENSIONS,
-        filters=args.target_filter,
-        ranges=target_ranges,
-        recursive=not args.no_recursive,
-        include_proxies=args.include_proxies,
-    )
+    if args.reference_groups:
+        references = build_exact_media_groups(
+            args.reference_groups,
+            extensions=AUDIO_EXTENSIONS,
+            include_drift_corrected=args.include_drift_corrected,
+        )
+    else:
+        references = group_by_parent(
+            scan_media(
+                args.references,
+                extensions=AUDIO_EXTENSIONS,
+                filters=args.reference_filter,
+                ranges=reference_ranges,
+                recursive=not args.no_recursive,
+                include_drift_corrected=args.include_drift_corrected,
+            )
+        )
+
+    if args.target_groups:
+        targets = build_exact_media_groups(
+            args.target_groups,
+            extensions=VIDEO_EXTENSIONS,
+            include_proxies=args.include_proxies,
+        )
+    else:
+        targets = group_by_parent(
+            scan_media(
+                args.targets,
+                extensions=VIDEO_EXTENSIONS,
+                filters=args.target_filter,
+                ranges=target_ranges,
+                recursive=not args.no_recursive,
+                include_proxies=args.include_proxies,
+            )
+        )
 
     if not references:
         raise FileNotFoundError("Nenhuma referencia de audio encontrada com os criterios.")
@@ -672,8 +840,8 @@ def build_config(args: argparse.Namespace) -> tuple[dict, Path]:
         "ignore_metadata": not args.use_metadata,
         "use_camera_clock_model": not args.no_clock_model,
         "output": xml_output,
-        "references": group_by_parent(references),
-        "targets": group_by_parent(targets),
+        "references": references,
+        "targets": targets,
     }
     if args.camera_global_offset is not None:
         config["camera_global_offset"] = args.camera_global_offset
