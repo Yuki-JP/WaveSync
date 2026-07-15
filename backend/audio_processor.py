@@ -1,39 +1,79 @@
 """
-Motor de processamento de audio para sincronizacao por correlacao cruzada.
+Processamento de audio para sincronizacao por DSP.
 
-O modulo extrai audio de midias via FFmpeg, calcula offsets entre faixas e usa
-metadados do sistema apenas como uma estimativa inicial de janela. Como o
-mtime do Windows costuma representar o final da gravacao/copia, a estimativa
-de inicio e corrigida subtraindo a duracao real do arquivo.
+Este modulo cuida apenas da etapa de audio:
+- extrair qualquer midia para WAV mono em 11025 Hz;
+- medir duracao real pelo numero de samples do WAV extraido;
+- gerar features de saliencia baseadas em transientes/ataques de voz;
+- normalizar a saliencia por Z-score para correlacao posterior.
 """
 
 from __future__ import annotations
 
 import logging
-import os
+import hashlib
+import json
+import re
+import subprocess
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-import ffmpeg
-import librosa
 import numpy as np
-from scipy.signal import correlate
-from tqdm import tqdm
 
 
-SAMPLE_RATE = 22_050
+SAMPLE_RATE = 11_025
 CHANNELS = 1
-SAMPLE_FORMAT = "s16"
-DEFAULT_WINDOW_SECONDS = 180.0
-LOW_CONFIDENCE_MIN_Z_SCORE = 8.0
-LOW_CONFIDENCE_MIN_PROMINENCE = 1.15
+WAV_CODEC = "pcm_s16le"
+TRANSIENT_DECIMATION_FACTOR = 5
+TRANSIENT_FEATURE_RATE = SAMPLE_RATE / TRANSIENT_DECIMATION_FACTOR
+EPSILON = 1e-12
+DEFAULT_WINDOW_SECONDS = 300.0
+CACHE_VERSION = 1
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class AudioFeatures:
+    """
+    Representacao DSP usada pelas proximas etapas de alinhamento.
+
+    Os nomes `envelope` e `normalized_envelope` sao preservados por contrato
+    com o main.py, mas agora carregam saliencia de transientes, nao RMS.
+    """
+
+    wav_path: Path
+    duration_seconds: float
+    sample_rate: int
+    feature_hop_samples: int
+    salience: np.ndarray
+    normalized_salience: np.ndarray
+
+    @property
+    def feature_rate(self) -> float:
+        return self.sample_rate / float(self.feature_hop_samples)
+
+    @property
+    def envelope(self) -> np.ndarray:
+        return self.salience
+
+    @property
+    def normalized_envelope(self) -> np.ndarray:
+        return self.normalized_salience
+
+    @property
+    def rms_window_samples(self) -> int:
+        return 1
+
+    @property
+    def rms_hop_samples(self) -> int:
+        return self.feature_hop_samples
+
+
+@dataclass(frozen=True)
 class CorrelationPeak:
-    """Resultado interno da busca de pico na correlacao."""
+    """Pico encontrado na correlacao entre duas features normalizadas."""
 
     peak_index: int
     lag_samples: int
@@ -44,8 +84,40 @@ class CorrelationPeak:
     low_confidence: bool
 
 
+@dataclass(frozen=True)
+class OffsetCalculation:
+    """Resultado de compatibilidade para a etapa de alinhamento."""
+
+    offset_seconds: float
+    peak: CorrelationPeak
+    source: str
+
+
+@dataclass(frozen=True)
+class SpanningGroup:
+    """Grupo simples de arquivos sequenciais, mantido para compatibilidade."""
+
+    group_id: str
+    paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CachedAudioPreparation:
+    """Resultado de preparo de audio com cache de WAV e features."""
+
+    wav_path: Path
+    features: AudioFeatures
+    cache_hit_wav: bool
+    cache_hit_features: bool
+
+
 def extract_audio_from_media(file_path: str | Path, output_wav_path: str | Path) -> Path:
-    """Extrai ou converte a pista de audio de uma midia para WAV mono 16-bit/22050 Hz."""
+    """
+    Extrai audio de uma midia para WAV mono/11025 Hz usando FFmpeg simples.
+
+    A duracao oficial nao vem do container original; ela deve ser medida depois
+    no WAV gerado por `get_wav_duration_seconds`.
+    """
     input_path = Path(file_path)
     output_path = Path(output_wav_path)
 
@@ -55,44 +127,434 @@ def extract_audio_from_media(file_path: str | Path, output_wav_path: str | Path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Extraindo audio: %s -> %s", input_path, output_path)
 
+    ffmpeg_exe = resolve_ffmpeg_executable()
+    command = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-acodec",
+        WAV_CODEC,
+        "-ac",
+        str(CHANNELS),
+        "-ar",
+        str(SAMPLE_RATE),
+        "-f",
+        "wav",
+        str(output_path),
+    ]
+
     try:
-        import imageio_ffmpeg
-
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-        (
-            ffmpeg.input(str(input_path))
-            .output(
-                str(output_path),
-                acodec="pcm_s16le",
-                ac=CHANNELS,
-                ar=SAMPLE_RATE,
-                format="wav",
-                sample_fmt=SAMPLE_FORMAT,
-            )
-            .overwrite_output()
-            .run(cmd=ffmpeg_exe, capture_stdout=True, capture_stderr=True)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    except ffmpeg.Error as exc:
-        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        logger.error("Falha ao executar FFmpeg para '%s'.", input_path)
-        raise RuntimeError(f"Erro do FFmpeg ao extrair audio de '{input_path}': {stderr}") from exc
     except Exception as exc:
-        logger.exception("Falha inesperada ao extrair audio de '%s'.", input_path)
-        raise RuntimeError(f"Falha inesperada ao extrair audio de '{input_path}': {exc}") from exc
+        raise RuntimeError(f"Falha ao extrair audio de '{input_path}': {exc}") from exc
 
-    logger.info("Audio extraido com sucesso: %s", output_path)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"Erro do FFmpeg ao extrair audio de '{input_path}': {completed.stderr}"
+        )
+
     return output_path
 
 
+def resolve_ffmpeg_executable() -> str:
+    """Retorna o executavel do FFmpeg empacotado quando disponivel."""
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+def prepare_cached_audio_features(
+    media_path: str | Path,
+    cache_root: str | Path,
+    *,
+    label: str = "media",
+) -> CachedAudioPreparation:
+    """
+    Extrai WAV e calcula features usando cache por assinatura do arquivo fonte.
+
+    A assinatura inclui caminho resolvido, tamanho, mtime_ns e parametros DSP.
+    Se o arquivo ou os parametros mudarem, um novo diretorio de cache e criado.
+    """
+    source_path = Path(media_path)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Arquivo de entrada nao encontrado: {source_path}")
+
+    cache_dir = cache_directory_for_media(source_path, cache_root)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = cache_dir / "metadata.json"
+    wav_path = cache_dir / f"{safe_cache_label(label)}.wav"
+    features_path = cache_dir / "features.npz"
+
+    signature = media_cache_signature(source_path)
+    cache_metadata = read_cache_metadata(metadata_path)
+    metadata_matches = cache_metadata.get("signature") == signature
+
+    cache_hit_wav = metadata_matches and is_valid_cached_wav(wav_path)
+    if cache_hit_wav:
+        logger.info("Cache WAV: %s -> %s", source_path.name, wav_path)
+    elif can_reuse_source_wav(source_path):
+        logger.info("Reutilizando WAV compativel: %s -> %s", source_path, wav_path)
+        copy_binary_file(source_path, wav_path)
+    else:
+        extract_audio_from_media(source_path, wav_path)
+
+    cache_hit_features = metadata_matches and is_valid_cached_features(features_path)
+    if cache_hit_features:
+        logger.info("Cache features: %s", source_path.name)
+        try:
+            features = load_cached_audio_features(wav_path, features_path)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Cache features invalido para %s: %s. Recalculando.",
+                source_path.name,
+                exc,
+            )
+            cache_hit_features = False
+            features = build_audio_features(wav_path)
+            save_cached_audio_features(features, features_path)
+    else:
+        features = build_audio_features(wav_path)
+        save_cached_audio_features(features, features_path)
+
+    write_cache_metadata(
+        metadata_path,
+        {
+            "signature": signature,
+            "source_path": str(source_path.resolve()),
+            "wav_path": str(wav_path),
+            "features_path": str(features_path),
+            "duration_seconds": features.duration_seconds,
+            "sample_rate": features.sample_rate,
+            "feature_hop_samples": features.feature_hop_samples,
+        },
+    )
+
+    return CachedAudioPreparation(
+        wav_path=wav_path,
+        features=features,
+        cache_hit_wav=cache_hit_wav,
+        cache_hit_features=cache_hit_features,
+    )
+
+
+def cache_directory_for_media(media_path: Path, cache_root: str | Path) -> Path:
+    return Path(cache_root) / media_cache_key(media_path)
+
+
+def media_cache_key(media_path: Path) -> str:
+    signature = media_cache_signature(media_path)
+    encoded = json.dumps(signature, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def media_cache_signature(media_path: Path) -> dict:
+    resolved = media_path.resolve()
+    stat_result = resolved.stat()
+    return {
+        "cache_version": CACHE_VERSION,
+        "path": str(resolved),
+        "size": stat_result.st_size,
+        "mtime_ns": stat_result.st_mtime_ns,
+        "sample_rate": SAMPLE_RATE,
+        "channels": CHANNELS,
+        "wav_codec": WAV_CODEC,
+        "transient_decimation_factor": TRANSIENT_DECIMATION_FACTOR,
+    }
+
+
+def read_cache_metadata(metadata_path: Path) -> dict:
+    if not metadata_path.exists():
+        return {}
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_cache_metadata(metadata_path: Path, metadata: dict) -> None:
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def is_valid_cached_wav(wav_path: Path) -> bool:
+    if not wav_path.exists():
+        return False
+    try:
+        with wave.open(str(wav_path), "rb") as wav_file:
+            return (
+                wav_file.getnchannels() == CHANNELS
+                and wav_file.getframerate() == SAMPLE_RATE
+                and wav_file.getnframes() > 0
+            )
+    except (OSError, wave.Error):
+        return False
+
+
+def can_reuse_source_wav(source_path: Path) -> bool:
+    if source_path.suffix.casefold() != ".wav":
+        return False
+    return is_valid_cached_wav(source_path)
+
+
+def copy_binary_file(source_path: Path, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with source_path.open("rb") as source_file, output_path.open("wb") as output_file:
+        while True:
+            chunk = source_file.read(1024 * 1024)
+            if not chunk:
+                break
+            output_file.write(chunk)
+
+
+def is_valid_cached_features(features_path: Path) -> bool:
+    if not features_path.exists():
+        return False
+    try:
+        with np.load(features_path) as data:
+            required = {"salience", "normalized_salience", "duration_seconds"}
+            return required.issubset(data.files)
+    except (OSError, ValueError):
+        return False
+
+
+def save_cached_audio_features(features: AudioFeatures, features_path: Path) -> None:
+    np.savez_compressed(
+        features_path,
+        salience=features.salience.astype(np.float32),
+        normalized_salience=features.normalized_salience.astype(np.float32),
+        duration_seconds=np.array(features.duration_seconds, dtype=np.float64),
+        sample_rate=np.array(features.sample_rate, dtype=np.int32),
+        feature_hop_samples=np.array(features.feature_hop_samples, dtype=np.int32),
+    )
+
+
+def load_cached_audio_features(wav_path: Path, features_path: Path) -> AudioFeatures:
+    with np.load(features_path) as data:
+        salience = np.asarray(data["salience"], dtype=np.float32)
+        normalized_salience = np.asarray(data["normalized_salience"], dtype=np.float32)
+        duration_seconds = float(data["duration_seconds"])
+        sample_rate = int(data["sample_rate"]) if "sample_rate" in data.files else SAMPLE_RATE
+        feature_hop_samples = (
+            int(data["feature_hop_samples"])
+            if "feature_hop_samples" in data.files
+            else TRANSIENT_DECIMATION_FACTOR
+        )
+
+    if sample_rate != SAMPLE_RATE:
+        raise ValueError(f"Feature cache com sample_rate invalido: {sample_rate}")
+    if feature_hop_samples != TRANSIENT_DECIMATION_FACTOR:
+        raise ValueError(
+            f"Feature cache com hop invalido: {feature_hop_samples}"
+        )
+    if salience.size == 0 or normalized_salience.size == 0:
+        raise ValueError("Feature cache vazio.")
+
+    return AudioFeatures(
+        wav_path=wav_path,
+        duration_seconds=duration_seconds,
+        sample_rate=sample_rate,
+        feature_hop_samples=feature_hop_samples,
+        salience=salience,
+        normalized_salience=normalized_salience,
+    )
+
+
+def safe_cache_label(label: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return cleaned.strip("._") or "media"
+
+
+def get_wav_duration_seconds(wav_path: str | Path) -> float:
+    """Calcula a duracao real do WAV por quantidade de samples / sample rate."""
+    path = Path(wav_path)
+    if not path.exists():
+        raise FileNotFoundError(f"WAV nao encontrado: {path}")
+
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_count = wav_file.getnframes()
+            sample_rate = wav_file.getframerate()
+    except wave.Error as exc:
+        raise RuntimeError(f"Erro ao ler WAV '{path}'.") from exc
+
+    if frame_count <= 0:
+        raise ValueError(f"WAV sem samples: {path}")
+    if sample_rate <= 0:
+        raise ValueError(f"Sample rate invalido no WAV '{path}': {sample_rate}")
+
+    return frame_count / float(sample_rate)
+
+
+def get_audio_duration_seconds(audio_path: str | Path) -> float:
+    """
+    Retorna duracao por samples.
+
+    Nesta etapa, a fonte confiavel e o WAV extraido. Arquivos nao-WAV devem ser
+    passados antes por `extract_audio_from_media`.
+    """
+    path = Path(audio_path)
+    if path.suffix.lower() != ".wav":
+        raise ValueError(
+            "Duracao oficial deve ser medida no WAV extraido, nao no container original."
+        )
+    return get_wav_duration_seconds(path)
+
+
+def load_audio_samples(wav_path: str | Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Carrega audio mono em float32 na taxa fixa do projeto."""
+    path = Path(wav_path)
+    if not path.exists():
+        raise FileNotFoundError(f"WAV nao encontrado: {path}")
+
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            loaded_sample_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+            raw_audio = wav_file.readframes(frame_count)
+    except wave.Error as exc:
+        raise RuntimeError(f"Erro ao carregar WAV '{path}'.") from exc
+
+    if loaded_sample_rate != sample_rate:
+        raise ValueError(
+            f"Sample rate inesperado em '{path}': {loaded_sample_rate} Hz, esperado {sample_rate} Hz"
+        )
+
+    samples = decode_pcm_samples(raw_audio, sample_width, channels)
+    if samples.size == 0:
+        raise ValueError(f"Audio vazio: {path}")
+
+    return np.asarray(samples, dtype=np.float32)
+
+
+def decode_pcm_samples(raw_audio: bytes, sample_width: int, channels: int) -> np.ndarray:
+    """Converte PCM WAV em float32 mono normalizado para aproximadamente [-1, 1]."""
+    if sample_width == 1:
+        samples = (np.frombuffer(raw_audio, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif sample_width == 2:
+        samples = np.frombuffer(raw_audio, dtype="<i2").astype(np.float32) / 32768.0
+    elif sample_width == 4:
+        samples = np.frombuffer(raw_audio, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"Profundidade PCM nao suportada: {sample_width} byte(s)")
+
+    if channels > 1:
+        usable_size = (samples.size // channels) * channels
+        samples = samples[:usable_size].reshape(-1, channels).mean(axis=1)
+
+    return samples.astype(np.float32)
+
+
+def calculate_transient_salience(
+    samples: np.ndarray,
+    decimation_factor: int = TRANSIENT_DECIMATION_FACTOR,
+) -> np.ndarray:
+    """
+    Calcula uma feature de saliencia baseada em ataques/transientes.
+
+    Em vez de energia RMS suavizada, usamos diferenciacao do sinal para destacar
+    consoantes, estalos e mudancas rapidas da fala. A magnitude da derivada
+    torna a feature robusta a inversoes de polaridade entre microfones/cameras.
+    A reducao por max-pooling em blocos pequenos preserva ataques sem calcular
+    media de volume pesada.
+    """
+    audio = np.asarray(samples, dtype=np.float32)
+    if audio.size == 0:
+        raise ValueError("Nao e possivel calcular saliencia de audio vazio.")
+
+    if decimation_factor <= 0:
+        raise ValueError(f"Fator de decimacao invalido: {decimation_factor}")
+
+    audio = audio - np.mean(audio)
+    differentiated = np.diff(audio, prepend=audio[0])
+    salience = np.abs(differentiated).astype(np.float32)
+
+    if decimation_factor > 1:
+        salience = max_pool_1d(salience, decimation_factor)
+
+    if salience.size == 0:
+        raise ValueError("Feature de saliencia vazia.")
+
+    return np.asarray(salience, dtype=np.float32)
+
+
+def max_pool_1d(values: np.ndarray, block_size: int) -> np.ndarray:
+    """Reduz taxa preservando o maior ataque dentro de cada bloco curto."""
+    array = np.asarray(values, dtype=np.float32)
+    if block_size <= 1:
+        return array
+
+    usable_size = (array.size // block_size) * block_size
+    if usable_size == 0:
+        return array
+
+    pooled = array[:usable_size].reshape(-1, block_size).max(axis=1)
+    if usable_size < array.size:
+        tail = np.max(array[usable_size:])
+        pooled = np.append(pooled, tail)
+
+    return pooled.astype(np.float32)
+
+
+def zscore_normalize(values: np.ndarray) -> np.ndarray:
+    """Aplica normalizacao Z-score: (valor - media) / desvio padrao."""
+    array = np.asarray(values, dtype=np.float32)
+    if array.size == 0:
+        raise ValueError("Nao e possivel normalizar vetor vazio.")
+
+    mean = float(np.mean(array))
+    std = float(np.std(array))
+    if std <= EPSILON:
+        raise ValueError("Feature sem variacao suficiente para normalizacao Z-score.")
+
+    return ((array - mean) / std).astype(np.float32)
+
+
+def build_audio_features(wav_path: str | Path) -> AudioFeatures:
+    """Extrai duracao e saliencia de transientes normalizada de um WAV temporario."""
+    path = Path(wav_path)
+    samples = load_audio_samples(path)
+    salience = calculate_transient_salience(samples)
+    normalized_salience = zscore_normalize(salience)
+
+    return AudioFeatures(
+        wav_path=path,
+        duration_seconds=get_wav_duration_seconds(path),
+        sample_rate=SAMPLE_RATE,
+        feature_hop_samples=TRANSIENT_DECIMATION_FACTOR,
+        salience=salience,
+        normalized_salience=normalized_salience,
+    )
+
+
+def seconds_to_samples(seconds: float, sample_rate: int = SAMPLE_RATE) -> int:
+    """Converte segundos para samples, garantindo pelo menos 1 sample."""
+    if seconds <= 0:
+        raise ValueError(f"Duracao de janela invalida: {seconds}")
+    return max(1, int(round(seconds * sample_rate)))
+
+
 def calculate_offset(reference_wav: str | Path, target_wav: str | Path) -> float:
-    """Calcula o offset usando correlacao total, sem restringir por metadados."""
-    return calculate_offset_with_window(
-        reference_wav=reference_wav,
-        target_wav=target_wav,
+    """Compatibilidade: calcula offset por correlacao total das features Z-score."""
+    return calculate_offset_details_with_window(
+        reference_wav,
+        target_wav,
         estimated_offset=None,
         window_seconds=None,
-    )
+    ).offset_seconds
 
 
 def calculate_offset_with_window(
@@ -100,361 +562,178 @@ def calculate_offset_with_window(
     target_wav: str | Path,
     estimated_offset: float | None,
     window_seconds: float | None = DEFAULT_WINDOW_SECONDS,
+    return_absolute: bool = False,
 ) -> float:
-    """
-    Calcula o offset do target em relacao a referencia.
-
-    Quando uma estimativa e uma janela sao fornecidas, a primeira busca ocorre
-    em torno dessa regiao. Se o pico local tiver baixa confianca, o algoritmo
-    expande para correlacao total e escolhe o pico absoluto mais proeminente.
-
-    Offset positivo significa que o target comeca depois da referencia.
-    Offset negativo significa que o target esta adiantado em relacao a referencia.
-    """
-    reference_signal, target_signal, sample_rate = _load_and_prepare_pair(
+    """Compatibilidade: retorna apenas o offset em segundos."""
+    calculation = calculate_offset_details_with_window(
         reference_wav,
         target_wav,
+        estimated_offset=estimated_offset,
+        window_seconds=window_seconds,
+        return_absolute=return_absolute,
     )
-
-    logger.info("Calculando correlacao cruzada...")
-    correlation = _correlate_signals(reference_signal, target_signal)
-    center_index = len(reference_signal) - 1
-
-    if estimated_offset is None or window_seconds is None:
-        peak = _find_peak(correlation, center_index, sample_rate)
-        logger.info("Offset encontrado por busca total: %.6f segundos", peak.offset_seconds)
-        return peak.offset_seconds
-
-    expected_peak_index = center_index + int(round(estimated_offset * sample_rate))
-    window_samples = int(round(window_seconds * sample_rate))
-    start_search = max(0, expected_peak_index - window_samples)
-    end_search = min(len(correlation), expected_peak_index + window_samples + 1)
-
-    logger.info(
-        "Buscando em janela: estimativa=%.3fs, janela=+/-%.3fs",
-        estimated_offset,
-        window_seconds,
-    )
-
-    if start_search >= end_search:
-        logger.warning("Janela estimada invalida. Expandindo para busca total.")
-        peak = _find_peak(correlation, center_index, sample_rate)
-        logger.info("Offset encontrado por busca total: %.6f segundos", peak.offset_seconds)
-        return peak.offset_seconds
-
-    window_peak = _find_peak(
-        correlation,
-        center_index,
-        sample_rate,
-        start_index=start_search,
-        end_index=end_search,
-    )
-
-    logger.info(
-        "Pico na janela: offset=%.6fs, z=%.2f, proeminencia=%.3f",
-        window_peak.offset_seconds,
-        window_peak.z_score,
-        window_peak.prominence_ratio,
-    )
-
-    if not window_peak.low_confidence:
-        logger.info("Offset encontrado na janela: %.6f segundos", window_peak.offset_seconds)
-        return window_peak.offset_seconds
-
-    logger.warning(
-        "Pico na janela com baixa confianca. Expandindo para correlacao total."
-    )
-    full_peak = _find_peak(correlation, center_index, sample_rate)
-
-    logger.info(
-        "Pico total: offset=%.6fs, z=%.2f, proeminencia=%.3f",
-        full_peak.offset_seconds,
-        full_peak.z_score,
-        full_peak.prominence_ratio,
-    )
-
-    if _is_better_fallback(full_peak, window_peak):
-        logger.info("Fallback aceito. Offset encontrado: %.6f segundos", full_peak.offset_seconds)
-        return full_peak.offset_seconds
-
-    logger.info(
-        "Fallback nao superou a janela com clareza. Mantendo offset local: %.6f segundos",
-        window_peak.offset_seconds,
-    )
-    return window_peak.offset_seconds
+    return calculation.offset_seconds
 
 
-def sync_multiple_tracks(reference_file: str | Path, target_files_list: list[str | Path]) -> dict:
-    """
-    Sincroniza multiplos arquivos usando o inicio estimado da gravacao.
-
-    O Windows mtime normalmente aponta para o fim da escrita do arquivo. Para
-    aproximar o inicio real da gravacao, usamos:
-
-        inicio_estimado = os.path.getmtime(arquivo_original) - duracao
-    """
-    logger.info("Iniciando sincronizacao multi-track inteligente...")
-
-    ref_path = Path(reference_file)
-    if not ref_path.exists():
-        raise FileNotFoundError(f"Arquivo de referencia nao encontrado: {ref_path}")
-
-    ref_wav = Path("temp/main_reference.wav")
-    extract_audio_from_media(ref_path, ref_wav)
-
-    ref_duration = get_audio_duration_seconds(ref_wav)
-    ref_start_time = get_estimated_recording_start_time(ref_path, ref_duration)
-
-    logger.info(
-        "Referencia: duracao=%.3fs, mtime=%.3f, inicio_estimado=%.3f",
-        ref_duration,
-        os.path.getmtime(ref_path),
-        ref_start_time,
-    )
-
-    results = {
-        "reference": str(reference_file),
-        "offsets": {},
-        "metadata": {
-            "reference_duration_seconds": ref_duration,
-            "reference_estimated_start_time": ref_start_time,
-        },
-    }
-
-    for index, target_file in enumerate(tqdm(target_files_list, desc="Sincronizando faixas")):
-        try:
-            target_path = Path(target_file)
-            if not target_path.exists():
-                raise FileNotFoundError(f"Arquivo alvo nao encontrado: {target_path}")
-
-            target_wav = Path(f"temp/target_{index}_{target_path.stem}.wav")
-            extract_audio_from_media(target_path, target_wav)
-
-            target_duration = get_audio_duration_seconds(target_wav)
-            target_start_time = get_estimated_recording_start_time(target_path, target_duration)
-            estimated_offset = target_start_time - ref_start_time
-
-            logger.info(
-                "Alvo %s: duracao=%.3fs, mtime=%.3f, inicio_estimado=%.3f, offset_estimado=%.3fs",
-                target_path.name,
-                target_duration,
-                os.path.getmtime(target_path),
-                target_start_time,
-                estimated_offset,
-            )
-
-            offset = calculate_offset_with_window(
-                ref_wav,
-                target_wav,
-                estimated_offset=estimated_offset,
-                window_seconds=DEFAULT_WINDOW_SECONDS,
-            )
-
-            results["offsets"][str(target_file)] = offset
-            results["metadata"][str(target_file)] = {
-                "duration_seconds": target_duration,
-                "estimated_start_time": target_start_time,
-                "estimated_offset_seconds": estimated_offset,
-            }
-        except Exception as exc:
-            logger.error("Erro ao sincronizar o arquivo %s: %s", target_file, exc)
-            results["offsets"][str(target_file)] = None
-
-    return results
-
-
-def get_audio_duration_seconds(audio_path: str | Path) -> float:
-    """Retorna a duracao do audio em segundos usando librosa."""
-    path = Path(audio_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo de audio nao encontrado: {path}")
-
-    try:
-        duration = float(librosa.get_duration(path=str(path)))
-    except Exception as exc:
-        raise RuntimeError(f"Erro ao obter duracao de '{path}'.") from exc
-
-    if duration <= 0.0:
-        raise ValueError(f"Duracao invalida para '{path}': {duration}")
-
-    return duration
-
-
-def get_estimated_recording_start_time(file_path: str | Path, duration_seconds: float) -> float:
-    """Estima o inicio real da gravacao a partir do mtime menos a duracao."""
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo nao encontrado: {path}")
-    if duration_seconds <= 0.0:
-        raise ValueError(f"Duracao invalida para estimativa de inicio: {duration_seconds}")
-
-    return os.path.getmtime(path) - duration_seconds
-
-
-def _load_and_prepare_pair(
+def calculate_offset_details_with_window(
     reference_wav: str | Path,
     target_wav: str | Path,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    reference_path = Path(reference_wav)
-    target_path = Path(target_wav)
+    estimated_offset: float | None,
+    window_seconds: float | None = DEFAULT_WINDOW_SECONDS,
+    return_absolute: bool = False,
+) -> OffsetCalculation:
+    """
+    Calcula offset usando correlacao das features de transientes normalizadas.
 
-    if not reference_path.exists():
-        raise FileNotFoundError(f"WAV de referencia nao encontrado: {reference_path}")
-    if not target_path.exists():
-        raise FileNotFoundError(f"WAV alvo nao encontrado: {target_path}")
+    A janela e apenas um recorte opcional ao redor da estimativa recebida; as
+    travas cronologicas pertencem a outra etapa do pipeline.
+    """
+    reference = build_audio_features(reference_wav)
+    target = build_audio_features(target_wav)
+    feature_rate = reference.feature_rate
 
-    logger.info("Carregando audios em %s Hz...", SAMPLE_RATE)
+    correlation = _fft_correlate_full(target.normalized_envelope, reference.normalized_envelope)
+    center_index = len(reference.normalized_envelope) - 1
 
-    try:
-        reference_signal, sr_reference = librosa.load(reference_path, sr=SAMPLE_RATE, mono=True)
-        target_signal, sr_target = librosa.load(target_path, sr=SAMPLE_RATE, mono=True)
-    except Exception as exc:
-        logger.exception("Falha ao carregar arquivos WAV.")
-        raise RuntimeError("Erro ao carregar arquivos WAV.") from exc
+    source = "full"
+    start_index = 0
+    end_index = len(correlation)
 
-    if sr_reference != sr_target:
-        raise ValueError(
-            f"Taxas de amostragem diferentes: referencia={sr_reference}, target={sr_target}"
+    if estimated_offset is not None and window_seconds is not None:
+        expected_peak = center_index + int(round(estimated_offset * feature_rate))
+        window_samples = int(round(window_seconds * feature_rate))
+        start_index = max(0, expected_peak - window_samples)
+        end_index = min(len(correlation), expected_peak + window_samples + 1)
+        source = "window"
+
+    peak = _find_peak(correlation, center_index, feature_rate, start_index, end_index)
+    offset = abs(peak.offset_seconds) if return_absolute else peak.offset_seconds
+    return OffsetCalculation(offset_seconds=float(offset), peak=peak, source=source)
+
+
+def detect_spanning_groups(
+    target_files_list: list[str | Path],
+    metadata: dict,
+    max_gap_seconds: float = 3.0,
+) -> list[SpanningGroup]:
+    """
+    Compatibilidade leve para o main.py: detecta nomes sequenciais na mesma pasta.
+
+    A decisao final de como usar esses grupos fica fora deste modulo de DSP.
+    """
+    _ = metadata, max_gap_seconds
+    groups: list[SpanningGroup] = []
+    current: list[Path] = []
+    previous_parent: Path | None = None
+    previous_sequence: tuple[str, int] | None = None
+
+    for raw_path in sorted((Path(item) for item in target_files_list), key=lambda item: str(item).lower()):
+        sequence = _parse_sequential_name(raw_path.stem)
+        if sequence is None:
+            if len(current) > 1:
+                groups.append(_build_spanning_group(current, len(groups) + 1))
+            current = []
+            previous_parent = None
+            previous_sequence = None
+            continue
+
+        prefix, number = sequence
+        continues = (
+            current
+            and previous_parent == raw_path.parent
+            and previous_sequence is not None
+            and previous_sequence[0] == prefix
+            and previous_sequence[1] + 1 == number
         )
 
-    return (
-        _prepare_signal(reference_signal, "referencia"),
-        _prepare_signal(target_signal, "target"),
-        int(sr_reference),
-    )
+        if continues:
+            current.append(raw_path)
+        else:
+            if len(current) > 1:
+                groups.append(_build_spanning_group(current, len(groups) + 1))
+            current = [raw_path]
 
+        previous_parent = raw_path.parent
+        previous_sequence = sequence
 
-def _prepare_signal(signal: np.ndarray, label: str) -> np.ndarray:
-    """Remove DC offset e normaliza amplitude para tornar a correlacao mais estavel."""
-    if signal.size == 0:
-        raise ValueError(f"O audio de {label} esta vazio.")
+    if len(current) > 1:
+        groups.append(_build_spanning_group(current, len(groups) + 1))
 
-    prepared = np.asarray(signal, dtype=np.float32)
-    prepared = prepared - np.mean(prepared)
-
-    peak = float(np.max(np.abs(prepared)))
-    if peak == 0.0:
-        raise ValueError(f"O audio de {label} nao possui sinal util.")
-
-    return prepared / peak
-
-
-def _correlate_signals(reference_signal: np.ndarray, target_signal: np.ndarray) -> np.ndarray:
-    try:
-        return correlate(target_signal, reference_signal, mode="full", method="fft")
-    except Exception as exc:
-        logger.exception("Falha ao calcular correlacao cruzada.")
-        raise RuntimeError("Erro ao calcular correlacao cruzada.") from exc
+    return groups
 
 
 def _find_peak(
     correlation: np.ndarray,
     center_index: int,
-    sample_rate: int,
-    start_index: int = 0,
-    end_index: int | None = None,
+    feature_rate: float,
+    start_index: int,
+    end_index: int,
 ) -> CorrelationPeak:
-    end = len(correlation) if end_index is None else end_index
-    if start_index < 0 or end > len(correlation) or start_index >= end:
+    if start_index < 0 or end_index > len(correlation) or start_index >= end_index:
         raise ValueError(
-            f"Intervalo de busca invalido: start={start_index}, end={end}, len={len(correlation)}"
+            f"Janela de correlacao invalida: start={start_index}, end={end_index}"
         )
 
-    segment = correlation[start_index:end]
+    segment = correlation[start_index:end_index]
     local_peak_index = int(np.argmax(segment))
     peak_index = start_index + local_peak_index
     peak_value = float(segment[local_peak_index])
 
-    # CORREÇÃO: Média e Desvio Padrão agora utilizam a matriz GLOBAL da correlação
-    # para evitar a inflação estatística artificial em sub-segmentos pequenos.
-    global_mean = float(np.mean(correlation))
-    global_std = float(np.std(correlation))
-    z_score = (peak_value - global_mean) / global_std if global_std > 0.0 else 0.0
-
-    global_percentile_95 = float(np.percentile(correlation, 95))
-    prominence_denominator = max(abs(global_percentile_95), 1e-12)
-    prominence_ratio = peak_value / prominence_denominator
-
-    low_confidence = (
-        z_score < LOW_CONFIDENCE_MIN_Z_SCORE
-        or prominence_ratio < LOW_CONFIDENCE_MIN_PROMINENCE
+    correlation_mean = float(np.mean(correlation))
+    correlation_std = float(np.std(correlation))
+    z_score = (
+        (peak_value - correlation_mean) / correlation_std
+        if correlation_std > EPSILON
+        else 0.0
     )
 
+    percentile_95 = float(np.percentile(correlation, 95))
+    prominence_ratio = peak_value / max(abs(percentile_95), EPSILON)
     lag_samples = peak_index - center_index
-    offset_seconds = lag_samples / float(sample_rate)
+    offset_seconds = lag_samples / float(feature_rate)
 
     return CorrelationPeak(
         peak_index=peak_index,
         lag_samples=lag_samples,
         offset_seconds=float(offset_seconds),
         peak_value=peak_value,
-        z_score=z_score,
-        prominence_ratio=prominence_ratio,
-        low_confidence=low_confidence,
+        z_score=float(z_score),
+        prominence_ratio=float(prominence_ratio),
+        low_confidence=z_score < 8.0 or prominence_ratio < 1.15,
     )
 
 
-def _is_better_fallback(full_peak: CorrelationPeak, window_peak: CorrelationPeak) -> bool:
-    """Aceita fallback quando o pico global e claramente mais confiavel ou expressivo."""
-    if full_peak.peak_value <= 0.0:
-        return False
+def _fft_correlate_full(signal: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """Correlacao 1D completa via FFT, sem depender de scipy."""
+    left = np.asarray(signal, dtype=np.float32)
+    right = np.asarray(kernel, dtype=np.float32)
+    if left.size == 0 or right.size == 0:
+        raise ValueError("Nao e possivel correlacionar features vazias.")
 
-    peak_gain = full_peak.peak_value / max(window_peak.peak_value, 1e-12)
-    z_gain = full_peak.z_score - window_peak.z_score
-    
-    # Se o pico total for 25% mais alto e apresentar melhoria de Z-Score, aceita o fallback
-    return peak_gain >= 1.25 and z_gain >= 3.0
-
-
-def _format_seconds_as_minutes(offset_seconds: float) -> str:
-    sign = "+" if offset_seconds >= 0.0 else "-"
-    absolute = abs(offset_seconds)
-    minutes = int(absolute // 60)
-    seconds = absolute % 60
-    return f"{sign}{minutes:02d}min {seconds:06.3f}s"
+    full_size = left.size + right.size - 1
+    fft_size = 1 << (full_size - 1).bit_length()
+    spectrum_left = np.fft.rfft(left, fft_size)
+    spectrum_right = np.fft.rfft(right[::-1], fft_size)
+    return np.fft.irfft(spectrum_left * spectrum_right, fft_size)[:full_size]
 
 
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
+def _parse_sequential_name(stem: str) -> tuple[str, int] | None:
+    match = re.search(r"(\d+)$", stem)
+    if match is None:
+        return None
+
+    prefix = stem[: match.start(1)]
+    number_text = match.group(1)
+    if not prefix or len(number_text) < 2:
+        return None
+
+    return prefix, int(number_text)
+
+
+def _build_spanning_group(paths: list[Path], group_index: int) -> SpanningGroup:
+    first = paths[0]
+    last = paths[-1]
+    return SpanningGroup(
+        group_id=f"span-{group_index:03d}-{first.stem}-to-{last.stem}",
+        paths=tuple(str(path) for path in paths),
     )
-
-    # Caminho local do áudio de lapela (Referência)
-    audio_lapela = (
-        r"E:\2026-05-16 - Casamento - Paulinho Pai e Tereza - Cananeia"
-        r"\02 AUDIOS\LAPELA 02 - DJI MIC - AMARELO\DJI_11_20260516_105338.WAV"
-    )
-
-    # Lista de vídeos das câmeras
-    videos_da_camera = [
-        (
-            r"E:\2026-05-16 - Casamento - Paulinho Pai e Tereza - Cananeia"
-            r"\01 CAMERAS\CAM 01 - A7III\C0012.MP4"
-        ),
-        (
-            r"E:\2026-05-16 - Casamento - Paulinho Pai e Tereza - Cananeia"
-            r"\01 CAMERAS\CAM 01 - A7III\C0013.MP4"
-        ),
-        (
-            r"E:\2026-05-16 - Casamento - Paulinho Pai e Tereza - Cananeia"
-            r"\01 CAMERAS\CAM 02 - A6500\C0030.MP4"
-        ),
-    ]
-
-    resultado_sync = sync_multiple_tracks(audio_lapela, videos_da_camera)
-
-    print("\n" + "=" * 56)
-    print("RESULTADO DA SINCRONIZACAO RE-CALIBRADA")
-    print(f"Referencia: {resultado_sync['reference']}\n")
-
-    for video, offset in resultado_sync["offsets"].items():
-        if offset is not None:
-            print(
-                f"-> {Path(video).name}: "
-                f"{_format_seconds_as_minutes(offset)} ({offset:.6f} s)"
-            )
-        else:
-            print(f"-> {Path(video).name}: falha na sincronizacao")
-
-    print("=" * 56)

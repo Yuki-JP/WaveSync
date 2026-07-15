@@ -1,0 +1,25 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Generated DSP/audio cache and temporary media
+temp/
+*.wav.tmp
+*.wave.tmp
+
+# Generated exports and audit output
+output/
+
+# Local logs
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

@@ -1,0 +1,62 @@
+{
+  "ignore_metadata": true,
+  "use_camera_clock_model": true,
+  "output": "output/teste debora e lucas/casamento_soho_trackcheck.xml",
+  "references": {
+    "lapela_dji_01_mic": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/02 AUDIOS/AUDIO - LAPELA DJI 01 - MIC/DJI_06_20260411_165508.WAV",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/02 AUDIOS/AUDIO - LAPELA DJI 01 - MIC/DJI_07_20260411_172612.WAV"
+    ],
+    "lapela_dji_02_caixa": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/02 AUDIOS/AUDIO - LAPELA DJI 02 - CAIXA/DJI_15_20260411_170802.WAV",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/02 AUDIOS/AUDIO - LAPELA DJI 02 - CAIXA/DJI_16_20260411_173907.WAV"
+    ],
+    "mesa_h4n": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/02 AUDIOS/AUDIO - MESA H4N/MONO-017.wav"
+    ]
+  },
+  "targets": {
+    "cam_01_a7iv_victor": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9715.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9716.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9717.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9718.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9719.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9720.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9721.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9722.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9723.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9724.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9725.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9726.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9727.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9728.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 01 - A7IV - VICTOR/A7IV_20260411_9729.MP4"
+    ],
+    "cam_02_zve10_kenia": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 02 - ZVE10 - KENIA/ZVE10_02_20260411_9450.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 02 - ZVE10 - KENIA/ZVE10_02_20260411_9451.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 02 - ZVE10 - KENIA/ZVE10_02_20260411_9452.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 02 - ZVE10 - KENIA/ZVE10_02_20260411_9453.MP4"
+    ],
+    "cam_03_zve10_kaiky": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 03 - ZVE10 - KAIKY/ZVE10_01_20260411_9647.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 03 - ZVE10 - KAIKY/ZVE10_01_20260411_9648.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 03 - ZVE10 - KAIKY/ZVE10_01_20260411_9649.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 03 - ZVE10 - KAIKY/ZVE10_01_20260411_9650.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 03 - ZVE10 - KAIKY/ZVE10_01_20260411_9651.MP4"
+    ],
+    "cam_04_a6600_gui": [
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0020.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0021.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0022.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0023.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0024.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0025.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0026.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0027.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0028.MP4",
+      "D:/2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho/01 CAMERAS/CAM 04 - A6600 - GUI/C0029.MP4"
+    ]
+  }
+}
