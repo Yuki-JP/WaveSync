@@ -43,65 +43,26 @@ output/                 XMLs/auditorias gerados, ignorado pelo Git
 
 ## Fluxo Recomendado
 
-## Distribuicao Para Usuarios
-
-### Opcao 1: Executavel pronto
-
-O build Windows gera:
-
-```text
-dist/PluralEyesClone/PluralEyesClone.exe
-```
-
-Para instalar numa maquina sem abrir janela de CMD, use o instalador clicavel:
-
-```text
-Instalar_PluralEyes_Clone.vbs
-```
-
-Ele abre uma janela do Windows perguntando onde salvar/instalar o aplicativo,
-copia a pasta `PluralEyesClone`, cria um atalho na area de trabalho e abre a
-ferramenta.
-
-O arquivo `Instalar_PluralEyes_Clone.bat` continua disponivel como fallback,
-mas pode abrir uma janela de terminal. Para usuarios finais, prefira o `.vbs`.
-
-Se voce preferir compartilhar manualmente, envie a pasta inteira:
-
-```text
-dist/PluralEyesClone/
-```
-
-Nao envie apenas o `.exe`, porque a pasta `_internal/` contem Python, NumPy,
-Tkinter e FFmpeg empacotados.
-
-Se a pasta `dist/PluralEyesClone/` nao existir, o instalador tenta gerar o
-executavel automaticamente. Nesse caso, a maquina precisa ter Python 3.9+
-instalado.
-
-### Opcao 2: Rodar pelo codigo-fonte
+### Interface Tkinter
 
 Se a pessoa baixar o repositorio e tiver Python 3.9+ instalado, basta abrir:
+
+```text
+python tkinter_app.py
+```
+
+Tambem existe um launcher opcional:
 
 ```text
 Abrir_PluralEyes_Clone.vbs
 ```
 
-Esse arquivo cria `.venv/`, instala as dependencias de `requirements.txt` e abre
-a interface automaticamente.
+O launcher cria `.venv/`, instala as dependencias de `requirements.txt` e abre a
+interface automaticamente. O arquivo `Abrir_PluralEyes_Clone.bat` continua
+disponivel como fallback para diagnostico.
 
-O arquivo `Abrir_PluralEyes_Clone.bat` continua disponivel como fallback para
-diagnostico.
-
-### Gerar Novo Executavel
-
-Para recriar o `.exe`:
-
-```powershell
-python tools\build_exe.py
-```
-
-O script instala `PyInstaller` automaticamente, se estiver faltando.
+Nao ha executavel empacotado nesta versao; o uso principal e pelo
+`tkinter_app.py`.
 
 ## Organizacao Das Tracks No Premiere
 
