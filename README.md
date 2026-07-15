@@ -23,6 +23,8 @@ git log -1 --oneline
 
 ```text
 main.py                 CLI principal de sincronizacao
+tkinter_app.py          Interface desktop local sem servidor
+streamlit_app.py        Interface local em Streamlit
 backend/audio_processor.py
 backend/xml_generator.py
 backend/audit_report.py
@@ -31,6 +33,7 @@ selections/             Selecoes pequenas para gerar configs
 golden/                 Baselines de regressao
 tools/make_config.py    Gera config a partir de pastas/filtros/ranges
 tools/select_media.py   Cria selection explicita por arquivos escolhidos
+tools/validate_selection.py Valida selection antes de sincronizar
 tools/sync_from_selection.py
 tools/run_regression.py
 tools/validate_golden.py
@@ -39,6 +42,106 @@ output/                 XMLs/auditorias gerados, ignorado pelo Git
 ```
 
 ## Fluxo Recomendado
+
+## Distribuicao Para Usuarios
+
+### Opcao 1: Executavel pronto
+
+O build Windows gera:
+
+```text
+dist/PluralEyesClone/PluralEyesClone.exe
+```
+
+Para instalar numa maquina, use o instalador clicavel:
+
+```text
+Instalar_PluralEyes_Clone.bat
+```
+
+Ele abre uma janela do Windows perguntando onde salvar/instalar o aplicativo,
+copia a pasta `PluralEyesClone`, cria um atalho na area de trabalho e abre a
+ferramenta.
+
+Se voce preferir compartilhar manualmente, envie a pasta inteira:
+
+```text
+dist/PluralEyesClone/
+```
+
+Nao envie apenas o `.exe`, porque a pasta `_internal/` contem Python, NumPy,
+Tkinter e FFmpeg empacotados.
+
+Se a pasta `dist/PluralEyesClone/` nao existir, o instalador tenta gerar o
+executavel automaticamente. Nesse caso, a maquina precisa ter Python 3.9+
+instalado.
+
+### Opcao 2: Rodar pelo codigo-fonte
+
+Se a pessoa baixar o repositorio e tiver Python 3.9+ instalado, basta abrir:
+
+```text
+Abrir_PluralEyes_Clone.bat
+```
+
+Esse arquivo cria `.venv/`, instala as dependencias de `requirements.txt` e abre
+a interface automaticamente.
+
+### Gerar Novo Executavel
+
+Para recriar o `.exe`:
+
+```powershell
+python tools\build_exe.py
+```
+
+O script instala `PyInstaller` automaticamente, se estiver faltando.
+
+## Organizacao Das Tracks No Premiere
+
+O XML organiza as cameras por prioridade simples de equipamento:
+
+- video: cameras melhores ficam nas tracks mais altas (`V4`, `V3`, ...);
+- audio nativo das cameras: cameras melhores ficam primeiro (`A1`, `A2`, ...);
+- lapelas/mesa ficam abaixo dos audios nativos das cameras.
+
+Exemplo com 4 cameras:
+
+- `V4/A1`: A7IV
+- `V3/A2`: ZVE10
+- `V2/A3`: ZVE10
+- `V1/A4`: DJI/Osmo
+- `A5+`: lapelas/mesa
+
+### Interface Desktop Local
+
+Para abrir a interface grafica sem navegador e sem servidor:
+
+```powershell
+python tkinter_app.py
+```
+
+Na janela, use somente o fluxo simples:
+
+1. Escolher audios de referencia
+2. Escolher videos das cameras
+3. Sincronizar
+
+Ao clicar em `Sincronizar`, uma janela do Windows pergunta onde salvar o XML.
+O arquivo `selection JSON` e gerado automaticamente em `selections/`.
+Tambem e possivel remover todos os audios/videos escolhidos ou apenas os itens
+selecionados na lista, sem fechar a interface.
+
+### Interface Streamlit
+
+Alternativa via navegador local:
+
+```powershell
+python -m streamlit run streamlit_app.py
+```
+
+O Streamlit sempre usa um servidor local. Se quiser evitar portas/localhost, use
+`tkinter_app.py`.
 
 ### 1. Criar selection com os arquivos escolhidos
 
@@ -62,6 +165,14 @@ python tools\select_media.py --from-config "configs\casamento_juliana_caue_teste
 Use um arquivo em `selections/` para manter exatamente os audios e videos que devem
 entrar no sync. Esse e o fluxo recomendado para poupar tempo e evitar que arquivos
 fora do trecho desejado entrem na timeline.
+
+Antes de gerar o config, valide a selection:
+
+```powershell
+python tools\validate_selection.py `
+  --selection "selections\casamento_soho_selection.json" `
+  --xml-output "output\casamento_soho_auto.xml"
+```
 
 ```powershell
 python tools\make_config.py --from-selection "selections\casamento_soho_selection.json"
@@ -229,6 +340,16 @@ O Git ignora:
 - configs locais `configs/*_auto.json`
 
 Commite somente configs/selection/golden que voce realmente quer preservar.
+
+## Cache DSP
+
+O cache em `temp/cache/` guarda WAVs extraidos e features DSP para acelerar
+novas execucoes com os mesmos arquivos. Ele nao guarda decisoes finais de sync.
+
+Para evitar crescimento indefinido, o pipeline limpa automaticamente `temp/cache/`
+a cada 5 sincronizacoes completas. Isso nao afeta a precisao: na execucao seguinte,
+o programa reextrai os audios e recalcula as features a partir dos arquivos
+originais.
 
 ## Comandos De Referencia
 

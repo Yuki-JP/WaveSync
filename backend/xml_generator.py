@@ -2,9 +2,10 @@
 FCP 7 XML generator (xmeml v4) for Adobe Premiere Pro.
 
 The timeline layout is camera-oriented:
-- one video track per camera/device/folder: V1, V2, V3...
-- camera native audio mirrors video order: V1/A1, V2/A2, V3/A3...
-- deduplicated reference audios start below cameras: A4, A5... when 3 cameras exist.
+- one video track per camera/device/folder;
+- better cameras are placed higher in Premiere video tracks: Vn, ..., V2, V1;
+- camera native audio starts at A1 in the same quality priority order;
+- deduplicated reference audios start below native camera audio.
 """
 
 from __future__ import annotations
@@ -80,6 +81,8 @@ def create_timeline_xml(
 
     camera_groups = _clips_grouped_by_camera(clips)
     _enforce_non_overlapping_camera_groups(camera_groups)
+    video_camera_groups = _camera_groups_for_video_tracks(camera_groups)
+    audio_camera_groups = _camera_groups_for_audio_tracks(camera_groups)
 
     sequence_duration = max(
         *(reference["end"] for reference in references),
@@ -101,8 +104,8 @@ def create_timeline_xml(
     video = ET.SubElement(media, "video")
     audio = ET.SubElement(media, "audio")
 
-    _add_camera_video_tracks(video, camera_groups, fps)
-    _add_camera_audio_tracks(audio, camera_groups, fps)
+    _add_camera_video_tracks(video, video_camera_groups, fps)
+    _add_camera_audio_tracks(audio, audio_camera_groups, fps)
     _add_reference_audio_tracks(
         audio,
         references=references,
@@ -691,6 +694,78 @@ def _clips_grouped_by_camera(clips: list[dict]) -> OrderedDict[str, list[dict]]:
         camera_clips.sort(key=lambda item: (item["start"], item["name"]))
 
     return grouped
+
+
+def _camera_groups_for_video_tracks(
+    camera_groups: OrderedDict[str, list[dict]],
+) -> OrderedDict[str, list[dict]]:
+    """
+    Return bottom-to-top video order.
+
+    Premiere shows higher-numbered video tracks above lower-numbered tracks, so
+    the best camera must be emitted last: V1 is lower priority, Vn is highest.
+    """
+    return OrderedDict(
+        sorted(
+            camera_groups.items(),
+            key=lambda item: (
+                _camera_quality_score(item[0]),
+                _camera_original_order(camera_groups, item[0]),
+            ),
+        )
+    )
+
+
+def _camera_groups_for_audio_tracks(
+    camera_groups: OrderedDict[str, list[dict]],
+) -> OrderedDict[str, list[dict]]:
+    """Return top-to-bottom native camera audio order: best camera on A1."""
+    return OrderedDict(
+        sorted(
+            camera_groups.items(),
+            key=lambda item: (
+                -_camera_quality_score(item[0]),
+                _camera_original_order(camera_groups, item[0]),
+            ),
+        )
+    )
+
+
+def _camera_original_order(camera_groups: OrderedDict[str, list[dict]], camera_name: str) -> int:
+    for index, name in enumerate(camera_groups):
+        if name == camera_name:
+            return index
+    return len(camera_groups)
+
+
+def _camera_quality_score(camera_name: str) -> int:
+    """
+    Heuristic priority for wedding cameras based on known device names.
+
+    This is intentionally simple and metadata-free: it uses folder/camera names
+    already selected by the user, which is enough for the current workflow.
+    """
+    normalized = _normalize_camera_quality_text(camera_name)
+    rules: list[tuple[tuple[str, ...], int]] = [
+        (("fx3", "fx30", "a7siii", "a7s iii"), 110),
+        (("a7iv", "a7 iv", "alpha 7 iv"), 100),
+        (("a7iii", "a7 iii", "a7s", "a7c", "a7 "), 95),
+        (("a6700", "a6600", "a6500", "a6400", "a6300"), 90),
+        (("zve10", "zv e10", "zv-e10"), 80),
+        (("osmo pocket", "pocket 3", "op3"), 50),
+        (("osmo action", "action", "oa5", "oa5p"), 45),
+        (("dji",), 40),
+    ]
+    for tokens, score in rules:
+        if any(token in normalized for token in tokens):
+            return score
+    return 60
+
+
+def _normalize_camera_quality_text(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", value.casefold())
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    return f" {collapsed} "
 
 
 def _enforce_non_overlapping_camera_groups(

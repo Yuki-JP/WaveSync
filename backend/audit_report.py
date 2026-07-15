@@ -529,6 +529,8 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
     success_count = len(successful)
     reference_cache_hits = int(metadata.get("reference_cache_hit_features_count") or 0)
     target_cache_hits = int(metadata.get("target_cache_hit_features_count") or 0)
+    auto_cache_cleanup = metadata.get("auto_cache_cleanup") or {}
+    cache_auto_summary = format_auto_cache_cleanup(auto_cache_cleanup)
 
     lines = [
         "",
@@ -550,6 +552,7 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
         f"Spanning   : {metadata.get('spanning_continuity_adjustment_count', 0)} ajuste(s)",
         f"TrackCheck : {'OK' if track_overlap_count == 0 else f'{track_overlap_count} overlap(s)'}",
         f"Cache DSP  : refs {reference_cache_hits}/{reference_count} | targets {target_cache_hits}/{success_count}",
+        f"Cache Auto : {cache_auto_summary}",
         f"XML        : {output_xml_path}",
         f"Audit CSV  : {audit_reports.get('csv', 'n/a')}",
         f"Audit JSON : {audit_reports.get('json', 'n/a')}",
@@ -586,6 +589,21 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
 
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+def format_auto_cache_cleanup(value: object) -> str:
+    if not isinstance(value, dict) or not value:
+        return "n/a"
+    if value.get("error"):
+        return f"falhou ({value.get('error')})"
+    interval = int(value.get("interval_syncs") or 5)
+    if value.get("cleanup_performed"):
+        removed_files = int(value.get("removed_files") or 0)
+        removed_bytes = int(value.get("removed_bytes") or 0)
+        return f"limpo apos {interval} syncs | {removed_files} arquivo(s), {removed_bytes / (1024.0**3):.2f} GiB"
+    completed = int(value.get("completed_since_cleanup") or 0)
+    remaining = max(0, interval - completed)
+    return f"{completed}/{interval} syncs | limpa em {remaining}"
 
 
 def format_offset(offset_seconds: float) -> str:

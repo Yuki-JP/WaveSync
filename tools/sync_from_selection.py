@@ -22,7 +22,13 @@ from make_config import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def application_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+PROJECT_ROOT = application_root()
 MAIN_SCRIPT = PROJECT_ROOT / "main.py"
 
 

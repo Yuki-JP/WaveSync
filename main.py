@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -37,10 +38,19 @@ from backend.audit_report import (
 from backend.audio_processor import prepare_cached_audio_features
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+def application_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+PROJECT_ROOT = application_root()
 DEFAULT_OUTPUT_XML = PROJECT_ROOT / "output" / "timeline_sincronizada.xml"
 TEMP_DIR = PROJECT_ROOT / "temp"
+CACHE_ROOT_DIR = TEMP_DIR / "cache"
 AUDIO_CACHE_DIR = TEMP_DIR / "cache" / "audio"
+CACHE_CLEANUP_STATE_PATH = TEMP_DIR / "cache_cleanup_state.json"
+CACHE_CLEANUP_INTERVAL_SYNCS = 5
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mts"}
 AUDIO_EXTENSIONS = {".wav", ".wave", ".mp3", ".aac", ".m4a", ".flac", ".ogg", ".wma"}
@@ -861,6 +871,114 @@ def cleanup_temp_wavs() -> int:
         except OSError as exc:
             logger.warning("Nao foi possivel remover temporario %s: %s", wav_file, exc)
     return removed
+
+
+def cleanup_cache_directory() -> tuple[int, int]:
+    """
+    Remove todo o cache DSP extraido/calculado.
+
+    A remocao do cache nao muda a precisao do sync; apenas forca o proximo run
+    a reextrair WAVs e recalcular features a partir dos arquivos originais.
+    """
+    if not CACHE_ROOT_DIR.exists():
+        ensure_temp_dir()
+        return 0, 0
+
+    cache_root = CACHE_ROOT_DIR.resolve()
+    temp_root = TEMP_DIR.resolve()
+    try:
+        cache_root.relative_to(temp_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Diretorio de cache inseguro para limpeza: {cache_root}") from exc
+
+    file_count = 0
+    total_bytes = 0
+    for item in CACHE_ROOT_DIR.rglob("*"):
+        if item.is_file():
+            file_count += 1
+            try:
+                total_bytes += item.stat().st_size
+            except OSError:
+                pass
+
+    shutil.rmtree(CACHE_ROOT_DIR)
+    ensure_temp_dir()
+    return file_count, total_bytes
+
+
+def read_cache_cleanup_state() -> dict:
+    if not CACHE_CLEANUP_STATE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(CACHE_CLEANUP_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_cache_cleanup_state(state: dict) -> None:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_CLEANUP_STATE_PATH.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def update_cache_cleanup_after_completed_sync() -> dict:
+    """
+    Conta sincronizacoes completas e limpa o cache automaticamente a cada 5.
+
+    O contador fica fora de `temp/cache`, entao sobrevivera a limpeza do cache.
+    """
+    state = read_cache_cleanup_state()
+    completed_since_cleanup = int(state.get("completed_since_cleanup") or 0) + 1
+    total_completed_syncs = int(state.get("total_completed_syncs") or 0) + 1
+
+    result = {
+        "enabled": True,
+        "interval_syncs": CACHE_CLEANUP_INTERVAL_SYNCS,
+        "completed_since_cleanup": completed_since_cleanup,
+        "total_completed_syncs": total_completed_syncs,
+        "cleanup_performed": False,
+        "removed_files": 0,
+        "removed_bytes": 0,
+    }
+
+    if completed_since_cleanup >= CACHE_CLEANUP_INTERVAL_SYNCS:
+        removed_files, removed_bytes = cleanup_cache_directory()
+        completed_since_cleanup = 0
+        result.update(
+            {
+                "completed_since_cleanup": completed_since_cleanup,
+                "cleanup_performed": True,
+                "removed_files": removed_files,
+                "removed_bytes": removed_bytes,
+                "last_cleanup_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+
+    state.update(result)
+    write_cache_cleanup_state(state)
+    return result
+
+
+def log_cache_cleanup_result(result: dict) -> None:
+    if result.get("cleanup_performed"):
+        removed_bytes = int(result.get("removed_bytes") or 0)
+        logger.info(
+            "Auto cache cleanup: %d/%d syncs. Cache limpo: %d arquivo(s), %.2f GiB removidos.",
+            CACHE_CLEANUP_INTERVAL_SYNCS,
+            CACHE_CLEANUP_INTERVAL_SYNCS,
+            int(result.get("removed_files") or 0),
+            removed_bytes / (1024.0**3),
+        )
+        return
+
+    logger.info(
+        "Auto cache cleanup: %d/%d syncs ate a proxima limpeza.",
+        int(result.get("completed_since_cleanup") or 0),
+        int(result.get("interval_syncs") or CACHE_CLEANUP_INTERVAL_SYNCS),
+    )
 
 
 def prepare_reference_tracks(
@@ -3573,9 +3691,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
     logger.info("Timebase XML: %s fps", timebase)
     if args.ignore_metadata:
         logger.warning("Flag --ignore-metadata ativa: mtime nao sera usado para estimar offsets.")
-    for track_index, camera_name in enumerate(dict.fromkeys(camera_map.values()), start=1):
+    for camera_name in dict.fromkeys(camera_map.values()):
         count = sum(1 for value in camera_map.values() if value == camera_name)
-        logger.info("Camera V%d/A%d: %s (%d clipe(s))", track_index, track_index + 1, camera_name, count)
+        logger.info("Camera detectada: %s (%d clipe(s))", camera_name, count)
     for index, target_file in enumerate(target_files, start=1):
         logger.info(
             "Ordem cronologica %03d: %s | mtime=%.3f",
@@ -3617,6 +3735,19 @@ def run_pipeline(args: argparse.Namespace) -> int:
         camera_map=camera_map,
     )
     logger.info("XML gerado com sucesso: %s", generated_xml)
+
+    try:
+        cache_cleanup_result = update_cache_cleanup_after_completed_sync()
+        sync_results.setdefault("metadata", {})["auto_cache_cleanup"] = cache_cleanup_result
+        log_cache_cleanup_result(cache_cleanup_result)
+    except Exception as exc:
+        logger.warning("Auto cache cleanup falhou, mantendo cache atual: %s", exc)
+        sync_results.setdefault("metadata", {})["auto_cache_cleanup"] = {
+            "enabled": True,
+            "interval_syncs": CACHE_CLEANUP_INTERVAL_SYNCS,
+            "cleanup_performed": False,
+            "error": str(exc),
+        }
 
     if args.cleanup:
         removed = cleanup_temp_wavs()

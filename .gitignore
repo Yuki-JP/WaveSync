@@ -8,6 +8,10 @@ __pycache__/
 venv/
 env/
 
+# Build artifacts
+build/
+dist/
+
 # Generated DSP/audio cache and temporary media
 temp/
 *.wav.tmp

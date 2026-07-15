@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Iterable
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def application_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+PROJECT_ROOT = application_root()
 DEFAULT_CONFIG_DIR = PROJECT_ROOT / "configs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
 
