@@ -224,7 +224,7 @@ try {
 
     Write-Step "Instalacao concluida"
     Write-Host "[OK] Python 3.9 e dependencias estao prontos."
-    Write-Host "[OK] Para abrir depois, use Abrir_PluralEyes_Clone.vbs ou rode python tkinter_app.py"
+    Write-Host "[OK] Para abrir depois, rode python tkinter_app.py na pasta do projeto."
 
     Open-App
     exit 0

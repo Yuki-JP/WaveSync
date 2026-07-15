@@ -66,25 +66,14 @@ https://www.python.org/downloads/
 
 ## 4. Abrir A Ferramenta
 
-Dentro da pasta do projeto, procure este arquivo:
+O arquivo `Instalar_Python39_E_Dependencias.bat` abre a interface no final da
+instalacao.
 
-```text
-Abrir_PluralEyes_Clone.vbs
-```
+Se a interface for fechada e voce quiser abrir de novo, entre na pasta do
+projeto, clique na barra de endereco do Explorer, digite `powershell` e aperte
+Enter.
 
-Duas vezes nele.
-
-Na primeira vez, ele pode demorar alguns minutos, porque vai criar um ambiente
-local e instalar as dependencias automaticamente.
-
-Se o Windows bloquear o arquivo `.vbs`, use o fallback:
-
-```text
-Abrir_PluralEyes_Clone.bat
-```
-
-Se preferir abrir manualmente, abra o PowerShell dentro da pasta do projeto e
-rode:
+No PowerShell, rode:
 
 ```powershell
 python tkinter_app.py
@@ -153,7 +142,7 @@ Arquivo > Importar
 
 Depois de importar:
 
-1. Dê play em trechos com fala.
+1. De play em trechos com fala.
 2. Compare boca, audio das cameras e lapelas.
 3. Confira se as cameras estao nas tracks de video.
 4. Confira se as lapelas/mesa estao nas tracks de audio mais abaixo.
@@ -163,13 +152,15 @@ fica fora da sequencia esperada.
 
 ## 10. Problemas Comuns
 
-### O Windows Nao Abre O Arquivo VBS
+### A Interface Nao Abriu
 
-Use:
+Rode novamente:
 
 ```text
-Abrir_PluralEyes_Clone.bat
+Instalar_Python39_E_Dependencias.bat
 ```
+
+Se preferir abrir manualmente, use `python tkinter_app.py`.
 
 ### O Python Nao Foi Encontrado
 
@@ -201,10 +192,9 @@ python tkinter_app.py
 2. Code > Download ZIP
 3. Extrair o ZIP
 4. Rodar Instalar_Python39_E_Dependencias.bat
-5. Abrir Abrir_PluralEyes_Clone.vbs
-6. Selecionar audios
-7. Selecionar videos
-8. Clicar em Sincronizar
-9. Escolher onde salvar o XML
-10. Importar o XML no Premiere
+5. Selecionar audios
+6. Selecionar videos
+7. Clicar em Sincronizar
+8. Escolher onde salvar o XML
+9. Importar o XML no Premiere
 ```

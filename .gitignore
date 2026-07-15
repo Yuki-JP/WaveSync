@@ -21,7 +21,20 @@ temp/
 output/
 
 # Local generated config experiments
-configs/*_auto.json
+configs/*.json
+selections/*.json
+golden/*.json
+
+# Optional/dev-only local launchers and tools
+Abrir_PluralEyes_Clone.bat
+Abrir_PluralEyes_Clone.vbs
+streamlit_app.py
+tools/bootstrap.py
+tools/run_regression.py
+tools/select_media.py
+tools/sync_from_selection.py
+tools/validate_golden.py
+tools/validate_selection.py
 
 # Local logs
 *.log

@@ -1,91 +1,57 @@
 # PluralEyes Clone - Sync Multicamera
 
-Ferramenta Python para sincronizacao automatica de audio/video em fluxos reais de casamento, com foco em multicamera, lapelas continuas, mesa de som, cache DSP e export FCP XML para Premiere.
+Ferramenta Python para sincronizacao automatica de audio/video em fluxos reais
+de casamento, com exportacao FCP XML para Adobe Premiere.
 
-## Estado Atual
+## Para Usuario Final
 
-Versao funcional validada com o casamento Soho:
-
-- 4 cameras
-- 5 referencias de audio
-- 34 videos
-- 0 falhas
-- `TrackCheck : OK`
-- cache DSP validado
-
-Checkpoint funcional no Git:
-
-```powershell
-git log -1 --oneline
-```
-
-## Estrutura
-
-```text
-main.py                 CLI principal de sincronizacao
-tkinter_app.py          Interface desktop local sem servidor
-streamlit_app.py        Interface local em Streamlit
-backend/audio_processor.py
-backend/xml_generator.py
-backend/audit_report.py
-configs/                Presets finais para main.py --config
-selections/             Selecoes pequenas para gerar configs
-golden/                 Baselines de regressao
-tools/make_config.py    Gera config a partir de pastas/filtros/ranges
-tools/select_media.py   Cria selection explicita por arquivos escolhidos
-tools/validate_selection.py Valida selection antes de sincronizar
-tools/sync_from_selection.py
-tools/run_regression.py
-tools/validate_golden.py
-temp/                   cache e WAVs temporarios, ignorado pelo Git
-output/                 XMLs/auditorias gerados, ignorado pelo Git
-```
-
-## Fluxo Recomendado
-
-Para um passo a passo completo para usuario leigo, veja:
+Passo a passo completo:
 
 ```text
 TUTORIAL_USUARIO.md
 ```
 
-### Interface Tkinter
+Fluxo rapido:
 
-Em uma maquina nova, primeiro rode:
+1. Baixe o projeto pelo GitHub.
+2. Extraia o arquivo `.zip`.
+3. Abra `Instalar_Python39_E_Dependencias.bat`.
+4. Selecione os audios de referencia.
+5. Selecione os videos das cameras.
+6. Clique em `Sincronizar`.
+7. Escolha onde salvar o XML.
+8. Importe o XML no Premiere.
+
+## Arquivos Principais
 
 ```text
-Instalar_Python39_E_Dependencias.bat
+Instalar_Python39_E_Dependencias.bat  Instala Python 3.9/dependencias e abre a interface
+TUTORIAL_USUARIO.md                   Tutorial para usuario leigo
+requirements.txt                      Dependencias Python
+tkinter_app.py                        Interface grafica local
+main.py                               Motor principal de sincronizacao
+backend/audio_processor.py            Extracao e features DSP
+backend/xml_generator.py              Geracao do XML para Premiere
+backend/audit_report.py               Relatorios CSV/JSON
+tools/install_python39_deps.ps1       Instalador chamado pelo .bat
+tools/make_config.py                  Gerador de config usado pela interface
 ```
 
-Esse script instala Python 3.9, cria o ambiente local `.venv/`, instala as
-dependencias de `requirements.txt` e abre a interface.
+## Como Abrir Manualmente
 
-Se a pessoa ja tiver Python 3.9+ instalado, tambem pode abrir manualmente:
+Se o Python e as dependencias ja estiverem instalados:
 
-```text
+```powershell
 python tkinter_app.py
 ```
-
-Tambem existe um launcher opcional:
-
-```text
-Abrir_PluralEyes_Clone.vbs
-```
-
-O launcher cria `.venv/`, instala as dependencias de `requirements.txt` e abre a
-interface automaticamente. O arquivo `Abrir_PluralEyes_Clone.bat` continua
-disponivel como fallback para diagnostico.
-
-Nao ha executavel empacotado nesta versao; o uso principal e pelo
-`tkinter_app.py`.
 
 ## Organizacao Das Tracks No Premiere
 
 O XML organiza as cameras por prioridade simples de equipamento:
 
-- video: cameras melhores ficam nas tracks mais altas (`V4`, `V3`, ...);
-- audio nativo das cameras: cameras melhores ficam primeiro (`A1`, `A2`, ...);
-- lapelas/mesa ficam abaixo dos audios nativos das cameras.
+- cameras melhores ficam nas tracks de video mais altas (`V4`, `V3`, ...);
+- audios nativos das cameras ficam primeiro (`A1`, `A2`, ...);
+- lapelas e mesa ficam nas tracks de audio abaixo das cameras.
 
 Exemplo com 4 cameras:
 
@@ -95,265 +61,16 @@ Exemplo com 4 cameras:
 - `V1/A4`: DJI/Osmo
 - `A5+`: lapelas/mesa
 
-### Interface Desktop Local
+## Arquivos Gerados Localmente
 
-Para abrir a interface grafica sem navegador e sem servidor:
-
-```powershell
-python tkinter_app.py
-```
-
-Na janela, use somente o fluxo simples:
-
-1. Escolher audios de referencia
-2. Escolher videos das cameras
-3. Sincronizar
-
-Ao clicar em `Sincronizar`, uma janela do Windows pergunta onde salvar o XML.
-O arquivo `selection JSON` e gerado automaticamente em `selections/`.
-Tambem e possivel remover todos os audios/videos escolhidos ou apenas os itens
-selecionados na lista, sem fechar a interface.
-
-### Interface Streamlit
-
-Alternativa via navegador local:
-
-```powershell
-python -m streamlit run streamlit_app.py
-```
-
-O Streamlit sempre usa um servidor local. Se quiser evitar portas/localhost, use
-`tkinter_app.py`.
-
-### 1. Criar selection com os arquivos escolhidos
-
-Para montar uma selection pelo terminal:
-
-```powershell
-python tools\select_media.py
-```
-
-O script pergunta o nome do projeto, os grupos de audio/lapela e os grupos de
-camera. Em cada grupo, cole ou arraste os arquivos que devem entrar no sync.
-
-Para converter um config validado em selection explicita:
-
-```powershell
-python tools\select_media.py --from-config "configs\casamento_juliana_caue_teste_limpo.json" --dry-run
-```
-
-### 2. Criar config a partir de selection
-
-Use um arquivo em `selections/` para manter exatamente os audios e videos que devem
-entrar no sync. Esse e o fluxo recomendado para poupar tempo e evitar que arquivos
-fora do trecho desejado entrem na timeline.
-
-Antes de gerar o config, valide a selection:
-
-```powershell
-python tools\validate_selection.py `
-  --selection "selections\casamento_soho_selection.json" `
-  --xml-output "output\casamento_soho_auto.xml"
-```
-
-```powershell
-python tools\make_config.py --from-selection "selections\casamento_soho_selection.json"
-```
-
-Para testar sem gravar:
-
-```powershell
-python tools\make_config.py --from-selection "selections\casamento_soho_selection.json" --dry-run
-```
-
-### 3. Rodar sincronizacao pelo config
-
-```powershell
-python main.py --config "configs\casamento_soho_auto.json"
-```
-
-O resultado esperado aparece no sumario:
+Durante o uso, a ferramenta pode criar:
 
 ```text
-Sucesso    : 34 arquivo(s)
-Falhas     : 0 arquivo(s)
-TrackCheck : OK
-Cache DSP  : refs 5/5 | targets 34/34
+configs/
+selections/
+temp/
+output/
 ```
 
-### 4. Comando unico: selection -> config -> sync
-
-Depois que a selection estiver correta, rode tudo com um comando:
-
-```powershell
-python tools\sync_from_selection.py --selection "selections\casamento_soho_selection.json"
-```
-
-Modos uteis:
-
-```powershell
-python tools\sync_from_selection.py --selection "selections\casamento_soho_selection.json" --dry-run
-python tools\sync_from_selection.py --selection "selections\casamento_soho_selection.json" --config-only
-```
-
-## Regressao
-
-Antes de mexer no motor de sync, rode todos os baselines validados:
-
-```powershell
-python tools\run_regression.py
-```
-
-Hoje esse comando valida:
-
-- `soho`
-- `juliana-caue`
-
-Para rodar apenas um caso:
-
-```powershell
-python tools\run_regression.py --case soho
-python tools\run_regression.py --case juliana-caue
-```
-
-Modo rapido, sem reprocessar:
-
-```powershell
-python tools\run_regression.py --validate-only
-```
-
-Se o cache DSP tiver sido limpo:
-
-```powershell
-python tools\run_regression.py --validate-only --allow-cold-cache
-```
-
-## Criando Uma Nova Selection
-
-### Modo recomendado: arquivos selecionados por grupo
-
-Liste exatamente os arquivos escolhidos pelo usuario em `reference_groups` e
-`target_groups`. O nome de cada grupo vira a base da organizacao do config.
-
-```json
-{
-  "name": "casamento_exemplo",
-  "reference_groups": {
-    "lapela_01": [
-      "D:/evento/02 AUDIOS/LAPELA 01/DJI_01.WAV",
-      "D:/evento/02 AUDIOS/LAPELA 01/DJI_02.WAV"
-    ],
-    "mesa_h4n": [
-      "D:/evento/02 AUDIOS/H4N/MONO-017.wav"
-    ]
-  },
-  "target_groups": {
-    "cam_01_a7iv_victor": [
-      "D:/evento/01 CAMERAS/CAM 01/A7IV_9715.MP4",
-      "D:/evento/01 CAMERAS/CAM 01/A7IV_9716.MP4"
-    ],
-    "cam_02_zve10_kenia": [
-      "D:/evento/01 CAMERAS/CAM 02/ZVE10_9450.MP4",
-      "D:/evento/01 CAMERAS/CAM 02/ZVE10_9451.MP4"
-    ]
-  },
-  "ignore_metadata": true,
-  "use_camera_clock_model": true,
-  "explicit_selection": true,
-  "output": "output/casamento_exemplo.xml"
-}
-```
-
-### Atalho: pastas com filtros/ranges
-
-Quando quiser gerar uma selection rapidamente a partir de uma pasta, ainda da para
-usar filtros e ranges:
-
-```json
-{
-  "name": "casamento_exemplo",
-  "references": [
-    "D:/evento/02 AUDIOS"
-  ],
-  "targets": [
-    "D:/evento/01 CAMERAS"
-  ],
-  "reference_filter": [
-    "DJI_01",
-    "DJI_02",
-    "MONO-017"
-  ],
-  "target_range": [
-    "A7IV_20260411_9715..A7IV_20260411_9729",
-    "ZVE10_02_20260411_9450..ZVE10_02_20260411_9453",
-    "C0020..C0029"
-  ],
-  "ignore_metadata": true,
-  "use_camera_clock_model": true,
-  "output": "output/casamento_exemplo.xml"
-}
-```
-
-Campos principais:
-
-- `name`: nome do preset/config gerado.
-- `reference_groups`: audios selecionados explicitamente por lapela/mesa.
-- `target_groups`: videos selecionados explicitamente por camera.
-- `references`: arquivos ou pastas de audio, para modo por filtro/range.
-- `targets`: arquivos ou pastas de video, para modo por filtro/range.
-- `reference_filter`: substrings/globs de audios permitidos no modo por pasta.
-- `target_filter`: substrings/globs de videos permitidos no modo por pasta.
-- `reference_range`: ranges inclusivos de audios no modo por pasta.
-- `target_range`: ranges inclusivos de videos no modo por pasta.
-- `ignore_metadata`: normalmente `true` para casamentos com relogios desalinhados.
-- `use_camera_clock_model`: normalmente `true`.
-- `explicit_selection`: `true` quando o usuario escolheu os arquivos manualmente.
-  Nesse modo, o sync nao descarta clipes pela trava de mtime entre cameras e audios.
-- `output`: XML final.
-
-## Arquivos Que Nao Devem Ser Commitados
-
-O Git ignora:
-
-- `temp/`
-- `output/`
-- `__pycache__/`
-- cache DSP
-- configs locais `configs/*_auto.json`
-
-Commite somente configs/selection/golden que voce realmente quer preservar.
-
-## Cache DSP
-
-O cache em `temp/cache/` guarda WAVs extraidos e features DSP para acelerar
-novas execucoes com os mesmos arquivos. Ele nao guarda decisoes finais de sync.
-
-Para evitar crescimento indefinido, o pipeline limpa automaticamente `temp/cache/`
-a cada 5 sincronizacoes completas. Isso nao afeta a precisao: na execucao seguinte,
-o programa reextrai os audios e recalcula as features a partir dos arquivos
-originais.
-
-## Comandos De Referencia
-
-Gerar config manual por CLI:
-
-```powershell
-python tools\make_config.py `
-  --name casamento_soho_auto `
-  -r "D:\2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho\02 AUDIOS" `
-  --reference-filter DJI_06_20260411_165508 DJI_07_20260411_172612 DJI_15_20260411_170802 DJI_16_20260411_173907 MONO-017 `
-  -t "D:\2026-04-11 - Casamento - Debora Seimaru e Lucas - Soho\01 CAMERAS" `
-  --target-range A7IV_20260411_9715..A7IV_20260411_9729 ZVE10_02_20260411_9450..ZVE10_02_20260411_9453 ZVE10_01_20260411_9647..ZVE10_01_20260411_9651 C0020..C0029
-```
-
-Rodar config:
-
-```powershell
-python main.py --config "configs\casamento_soho_auto.json"
-```
-
-Validar golden:
-
-```powershell
-python tools\validate_golden.py
-```
+Essas pastas guardam configs temporarios, cache DSP, XMLs e auditorias. Elas sao
+locais da maquina do usuario e nao precisam ir para o Git.
