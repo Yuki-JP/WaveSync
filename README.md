@@ -53,15 +53,18 @@ O build Windows gera:
 dist/PluralEyesClone/PluralEyesClone.exe
 ```
 
-Para instalar numa maquina, use o instalador clicavel:
+Para instalar numa maquina sem abrir janela de CMD, use o instalador clicavel:
 
 ```text
-Instalar_PluralEyes_Clone.bat
+Instalar_PluralEyes_Clone.vbs
 ```
 
 Ele abre uma janela do Windows perguntando onde salvar/instalar o aplicativo,
 copia a pasta `PluralEyesClone`, cria um atalho na area de trabalho e abre a
 ferramenta.
+
+O arquivo `Instalar_PluralEyes_Clone.bat` continua disponivel como fallback,
+mas pode abrir uma janela de terminal. Para usuarios finais, prefira o `.vbs`.
 
 Se voce preferir compartilhar manualmente, envie a pasta inteira:
 
@@ -81,11 +84,14 @@ instalado.
 Se a pessoa baixar o repositorio e tiver Python 3.9+ instalado, basta abrir:
 
 ```text
-Abrir_PluralEyes_Clone.bat
+Abrir_PluralEyes_Clone.vbs
 ```
 
 Esse arquivo cria `.venv/`, instala as dependencias de `requirements.txt` e abre
 a interface automaticamente.
+
+O arquivo `Abrir_PluralEyes_Clone.bat` continua disponivel como fallback para
+diagnostico.
 
 ### Gerar Novo Executavel
 

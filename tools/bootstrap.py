@@ -25,6 +25,12 @@ def venv_python() -> Path:
     return VENV_DIR / "bin" / "python"
 
 
+def venv_pythonw() -> Path:
+    if os.name == "nt":
+        return VENV_DIR / "Scripts" / "pythonw.exe"
+    return venv_python()
+
+
 def run(command: list[str], *, cwd: Path = PROJECT_ROOT) -> None:
     print(" ".join(f'"{item}"' if " " in item else item for item in command), flush=True)
     subprocess.run(command, cwd=cwd, check=True)
@@ -67,7 +73,15 @@ def verify_runtime(python_path: Path) -> None:
 
 def open_app(python_path: Path) -> int:
     print("[SETUP] Abrindo interface...", flush=True)
-    completed = subprocess.run([str(python_path), str(APP_SCRIPT)], cwd=PROJECT_ROOT)
+    gui_python = venv_pythonw()
+    if not gui_python.exists():
+        gui_python = python_path
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    completed = subprocess.run(
+        [str(gui_python), str(APP_SCRIPT)],
+        cwd=PROJECT_ROOT,
+        creationflags=creationflags,
+    )
     return int(completed.returncode)
 
 

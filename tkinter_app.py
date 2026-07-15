@@ -125,6 +125,20 @@ def build_sync_command(selection: Path, xml_output: str) -> list[str]:
     ]
 
 
+def hidden_subprocess_options() -> dict[str, object]:
+    """Prevent a console window from appearing while the sync worker runs."""
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def run_embedded_sync_worker(selection: str, xml_output: str) -> int:
     """Generate config from a selection and run main.py inside this process."""
     from tools.make_config import (
@@ -656,6 +670,7 @@ class PluralEyesSimpleApp(tk.Tk):
                     "PYTHONIOENCODING": "utf-8",
                     "PYTHONUTF8": "1",
                 },
+                **hidden_subprocess_options(),
             )
             self.running_process = process
             if process.stdout is not None:
