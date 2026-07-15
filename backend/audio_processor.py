@@ -151,6 +151,7 @@ def extract_audio_from_media(file_path: str | Path, output_wav_path: str | Path)
             capture_output=True,
             text=True,
             check=False,
+            **hidden_subprocess_options(),
         )
     except Exception as exc:
         raise RuntimeError(f"Falha ao extrair audio de '{input_path}': {exc}") from exc
@@ -161,6 +162,20 @@ def extract_audio_from_media(file_path: str | Path, output_wav_path: str | Path)
         )
 
     return output_path
+
+
+def hidden_subprocess_options() -> dict[str, object]:
+    """Evita que FFmpeg/Python abram uma janela de CMD no Windows."""
+    if not hasattr(subprocess, "STARTUPINFO"):
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
 
 
 def resolve_ffmpeg_executable() -> str:
