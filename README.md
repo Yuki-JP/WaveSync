@@ -43,6 +43,12 @@ output/                 XMLs/auditorias gerados, ignorado pelo Git
 
 ## Fluxo Recomendado
 
+Para um passo a passo completo para usuario leigo, veja:
+
+```text
+TUTORIAL_USUARIO.md
+```
+
 ### Interface Tkinter
 
 Se a pessoa baixar o repositorio e tiver Python 3.9+ instalado, basta abrir:
