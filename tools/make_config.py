@@ -5,6 +5,8 @@ Examples:
     -r "D:/evento/02 AUDIOS" ^
     -t "D:/evento/01 CAMERAS"
 
+  python tools/make_config.py --from-selection selections/casamento_soho_selection.json
+
   python tools/make_config.py --name casamento_soho_teste ^
     -r "D:/evento/02 AUDIOS" --reference-filter DJI_06 DJI_07 MONO-017 ^
     -t "D:/evento/01 CAMERAS" --target-range A7IV_20260411_9715..A7IV_20260411_9729 C0020..C0029
@@ -48,8 +50,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Gera um JSON de config compativel com main.py --config."
     )
     parser.add_argument(
+        "--from-selection",
+        default=None,
+        help=(
+            "JSON pequeno com paths, filtros e ranges. "
+            "Argumentos passados na CLI sobrescrevem a selecao."
+        ),
+    )
+    parser.add_argument(
         "--name",
-        required=True,
+        default=None,
         help="Nome do preset. Ex: casamento_soho, juliana_caue_cerimonia.",
     )
     parser.add_argument(
@@ -58,7 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--references",
         dest="references",
         nargs="+",
-        required=True,
+        default=None,
         help="Arquivos ou pastas de audio de referencia.",
     )
     parser.add_argument(
@@ -67,7 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--targets",
         dest="targets",
         nargs="+",
-        required=True,
+        default=None,
         help="Arquivos ou pastas de videos alvo.",
     )
     parser.add_argument(
@@ -83,25 +93,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference-filter",
         nargs="*",
-        default=[],
+        default=None,
         help="Inclui referencias por substring/glob. OR entre filtros.",
     )
     parser.add_argument(
         "--target-filter",
         nargs="*",
-        default=[],
+        default=None,
         help="Inclui targets por substring/glob. OR entre filtros.",
     )
     parser.add_argument(
         "--reference-range",
         nargs="*",
-        default=[],
+        default=None,
         help="Ranges inclusivos de referencias. Ex: DJI_06..DJI_07 ou 6-7.",
     )
     parser.add_argument(
         "--target-range",
         nargs="*",
-        default=[],
+        default=None,
         help=(
             "Ranges inclusivos de targets. "
             "Ex: A7IV_20260411_9715..A7IV_20260411_9729 ou C0020..C0029."
@@ -141,7 +151,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--camera-offset",
         action="append",
-        default=[],
+        default=None,
         metavar="CAMERA=SECONDS",
         help="Adiciona offsets por camera ao JSON. Pode repetir.",
     )
@@ -156,6 +166,227 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Mostra resumo e JSON, mas nao grava arquivo.",
     )
     return parser.parse_args(argv)
+
+
+def load_selection(selection_path: str | None) -> tuple[dict, Path | None]:
+    if not selection_path:
+        return {}, None
+
+    path = Path(selection_path).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Selection JSON nao encontrado: {path}")
+    if not path.is_file():
+        raise ValueError(f"Selection deve ser arquivo JSON: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Selection JSON deve conter um objeto: {path}")
+    return payload, path.resolve()
+
+
+def flatten_string_list(value: object, label: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        return [str(value)]
+    if isinstance(value, dict):
+        items: list[str] = []
+        for nested_value in value.values():
+            items.extend(flatten_string_list(nested_value, label))
+        return items
+    if isinstance(value, (list, tuple)):
+        items = []
+        for nested_item in value:
+            items.extend(flatten_string_list(nested_item, label))
+        return items
+    raise ValueError(f"Valor invalido em {label}: {value!r}")
+
+
+def selection_value(
+    selection: dict,
+    *keys: str,
+    default: object = None,
+) -> object:
+    for key in keys:
+        if key in selection:
+            return selection[key]
+    return default
+
+
+def select_cli_or_selection(
+    args: argparse.Namespace,
+    attr_name: str,
+    selection: dict,
+    *selection_keys: str,
+    default: object = None,
+) -> object:
+    cli_value = getattr(args, attr_name)
+    if cli_value not in (None, []):
+        return cli_value
+    return selection_value(selection, *selection_keys, default=default)
+
+
+def resolve_selection_path_text(raw_path: str, base_dir: Path | None) -> str:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute() or base_dir is None:
+        return str(path)
+    return str((base_dir / path).resolve())
+
+
+def resolve_selection_paths(value: object, label: str, base_dir: Path | None) -> list[str]:
+    return [
+        resolve_selection_path_text(raw_path, base_dir)
+        for raw_path in flatten_string_list(value, label)
+    ]
+
+
+def bool_from_selection(value: object, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "sim", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "nao", "não", "off"}:
+            return False
+    return bool(value)
+
+
+def apply_selection(args: argparse.Namespace) -> argparse.Namespace:
+    selection, selection_path = load_selection(args.from_selection)
+    selection_dir = selection_path.parent if selection_path else None
+    args.selection_path = str(selection_path) if selection_path else None
+
+    args.name = select_cli_or_selection(args, "name", selection, "name")
+    args.references = resolve_selection_paths(
+        select_cli_or_selection(args, "references", selection, "references", "reference"),
+        "references",
+        selection_dir,
+    )
+    args.targets = resolve_selection_paths(
+        select_cli_or_selection(args, "targets", selection, "targets", "target"),
+        "targets",
+        selection_dir,
+    )
+    args.config_output = select_cli_or_selection(
+        args,
+        "config_output",
+        selection,
+        "config_output",
+        "configOutput",
+    )
+    args.xml_output = select_cli_or_selection(
+        args,
+        "xml_output",
+        selection,
+        "xml_output",
+        "xmlOutput",
+        "output",
+    )
+    args.reference_filter = flatten_string_list(
+        select_cli_or_selection(
+            args,
+            "reference_filter",
+            selection,
+            "reference_filter",
+            "referenceFilter",
+        ),
+        "reference_filter",
+    )
+    args.target_filter = flatten_string_list(
+        select_cli_or_selection(args, "target_filter", selection, "target_filter", "targetFilter"),
+        "target_filter",
+    )
+    args.reference_range = flatten_string_list(
+        select_cli_or_selection(
+            args,
+            "reference_range",
+            selection,
+            "reference_range",
+            "referenceRange",
+        ),
+        "reference_range",
+    )
+    args.target_range = flatten_string_list(
+        select_cli_or_selection(args, "target_range", selection, "target_range", "targetRange"),
+        "target_range",
+    )
+    args.camera_offset = flatten_string_list(
+        select_cli_or_selection(
+            args,
+            "camera_offset",
+            selection,
+            "camera_offset",
+            "camera_offsets",
+            "cameraOffsets",
+        ),
+        "camera_offset",
+    )
+
+    if "recursive" in selection and not args.no_recursive:
+        args.no_recursive = not bool_from_selection(selection["recursive"], default=True)
+    args.include_proxies = args.include_proxies or bool_from_selection(
+        selection_value(selection, "include_proxies", "includeProxies"),
+        default=False,
+    )
+    args.include_drift_corrected = args.include_drift_corrected or bool_from_selection(
+        selection_value(selection, "include_drift_corrected", "includeDriftCorrected"),
+        default=False,
+    )
+
+    if "ignore_metadata" in selection or "ignoreMetadata" in selection:
+        ignore_metadata = bool_from_selection(
+            selection_value(selection, "ignore_metadata", "ignoreMetadata"),
+            default=True,
+        )
+        args.use_metadata = args.use_metadata or not ignore_metadata
+    if "use_metadata" in selection or "useMetadata" in selection:
+        args.use_metadata = args.use_metadata or bool_from_selection(
+            selection_value(selection, "use_metadata", "useMetadata"),
+            default=False,
+        )
+
+    if "use_camera_clock_model" in selection or "useCameraClockModel" in selection:
+        use_clock_model = bool_from_selection(
+            selection_value(selection, "use_camera_clock_model", "useCameraClockModel"),
+            default=True,
+        )
+        args.no_clock_model = args.no_clock_model or not use_clock_model
+    if "no_clock_model" in selection or "noClockModel" in selection:
+        args.no_clock_model = args.no_clock_model or bool_from_selection(
+            selection_value(selection, "no_clock_model", "noClockModel"),
+            default=False,
+        )
+
+    if args.camera_global_offset is None:
+        selected_offset = selection_value(
+            selection,
+            "camera_global_offset",
+            "cameraGlobalOffset",
+        )
+        if selected_offset is not None:
+            args.camera_global_offset = float(selected_offset)
+
+    args.overwrite = args.overwrite or bool_from_selection(
+        selection_value(selection, "overwrite"),
+        default=False,
+    )
+    args.dry_run = args.dry_run or bool_from_selection(
+        selection_value(selection, "dry_run", "dryRun"),
+        default=False,
+    )
+
+    if not args.name:
+        raise ValueError("Informe --name ou use --from-selection com a chave name.")
+    if not args.references:
+        raise ValueError("Informe -r/--reference ou use --from-selection com references.")
+    if not args.targets:
+        raise ValueError("Informe -t/--targets ou use --from-selection com targets.")
+
+    return args
 
 
 def slugify(text: str) -> str:
@@ -488,8 +719,8 @@ def write_config(config: dict, config_output: Path, *, overwrite: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
     try:
+        args = apply_selection(parse_args(argv))
         config, config_output = build_config(args)
         print_summary(config, config_output)
         if args.dry_run:
