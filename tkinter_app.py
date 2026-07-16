@@ -1,4 +1,4 @@
-"""Simple Tkinter desktop UI for the PluralEyes clone.
+"""Simple Tkinter desktop UI for WaveSync.
 
 Run:
   python tkinter_app.py
@@ -84,7 +84,7 @@ def resolve_sync_python() -> str:
     if getattr(sys, "frozen", False):
         return sys.executable
 
-    env_override = os.environ.get("PLURALEYES_SYNC_PYTHON")
+    env_override = os.environ.get("WAVESYNC_SYNC_PYTHON")
     if env_override and Path(env_override).exists():
         return str(Path(env_override))
 
@@ -162,7 +162,7 @@ def run_embedded_sync_worker(selection: str, xml_output: str) -> int:
     )
     config, config_path = build_config(make_args)
 
-    print("[SYNC-FROM-SELECTION] PluralEyes clone", flush=True)
+    print("[SYNC-FROM-SELECTION] WaveSync", flush=True)
     print(f"[SYNC-FROM-SELECTION] Selection : {selection}", flush=True)
     print(f"[SYNC-FROM-SELECTION] Config    : {config_path}", flush=True)
     print_summary(config, config_path)
@@ -180,7 +180,7 @@ def run_embedded_sync_worker(selection: str, xml_output: str) -> int:
 
 
 def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PluralEyes Clone desktop app.")
+    parser = argparse.ArgumentParser(description="WaveSync desktop app.")
     parser.add_argument("--sync-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--selection", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--xml-output", default=None, help=argparse.SUPPRESS)
@@ -226,7 +226,7 @@ def add_files_grouped_by_parent(
             warnings.append(f"Proxy ignorado: {path.name}")
             continue
         if extensions == AUDIO_EXTENSIONS and (
-            "drift_corrected" in lowered or "pluraleyes_drift_corrected" in lowered
+            "drift_corrected" in lowered
         ):
             warnings.append(f"Drift corrected ignorado: {path.name}")
             continue
@@ -248,10 +248,10 @@ def count_files(groups: dict[str, list[str]]) -> int:
     return sum(len(paths) for paths in groups.values())
 
 
-class PluralEyesSimpleApp(tk.Tk):
+class WaveSyncSimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("PluralEyes Clone")
+        self.title("WaveSync")
         self.geometry("980x720")
         self.minsize(820, 600)
 
@@ -276,7 +276,7 @@ class PluralEyesSimpleApp(tk.Tk):
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
 
-        title = ttk.Label(header, text="PluralEyes Clone", font=("Segoe UI", 18, "bold"))
+        title = ttk.Label(header, text="WaveSync", font=("Segoe UI", 18, "bold"))
         title.grid(row=0, column=0, columnspan=3, sticky="w")
         subtitle = ttk.Label(
             header,
@@ -726,7 +726,7 @@ def main() -> int:
             return 2
         return run_embedded_sync_worker(args.selection, args.xml_output)
 
-    app = PluralEyesSimpleApp()
+    app = WaveSyncSimpleApp()
     app.mainloop()
     return 0
 

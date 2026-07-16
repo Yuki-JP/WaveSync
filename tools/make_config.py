@@ -598,7 +598,7 @@ def is_proxy_file(path: Path) -> bool:
 
 def is_drift_corrected_file(path: Path) -> bool:
     text = " ".join(path.parts).casefold()
-    return "drift_corrected" in text or "pluraleyes_drift_corrected" in text
+    return "drift_corrected" in text
 
 
 def matches_filters(path: Path, filters: list[str]) -> bool:

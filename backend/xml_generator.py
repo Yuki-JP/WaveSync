@@ -285,7 +285,7 @@ def _collect_references(sync_results: dict, fps: int) -> list[dict]:
 
 def _is_drift_corrected_reference(path_text: str) -> bool:
     normalized = path_text.replace("\\", "/").casefold()
-    return "_drift_corrected" in Path(path_text).stem.casefold() or "pluraleyes_drift_corrected" in normalized
+    return "_drift_corrected" in Path(path_text).stem.casefold() or "drift_corrected" in normalized
 
 
 def _reference_dedupe_key(path_text: str) -> str:

@@ -1,4 +1,4 @@
-# PluralEyes Clone - Sync Multicamera
+# WaveSync - Sync Multicamera
 
 Ferramenta Python para sincronizacao automatica de audio/video em fluxos reais
 de casamento, com exportacao FCP XML para Adobe Premiere.

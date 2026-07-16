@@ -213,7 +213,7 @@ function Open-App {
 }
 
 try {
-    Write-Step "Preparando PluralEyes Clone"
+    Write-Step "Preparando WaveSync"
     Write-Host "Pasta do projeto: $ProjectRoot"
 
     Ensure-RequirementsFile

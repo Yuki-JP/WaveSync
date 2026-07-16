@@ -1,1 +1,1 @@
-"""Command-line and packaging helpers for the PluralEyes clone."""
+"""Command-line helpers for WaveSync."""

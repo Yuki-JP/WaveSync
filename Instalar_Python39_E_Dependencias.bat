@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo ================================================================
-echo PluralEyes Clone - instalador de Python 3.9 e dependencias
+echo WaveSync - instalador de Python 3.9 e dependencias
 echo ================================================================
 echo.
 

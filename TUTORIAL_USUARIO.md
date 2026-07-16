@@ -9,7 +9,7 @@ arquivo XML para importar no Adobe Premiere com os videos e audios sincronizados
 2. Entre neste link:
 
 ```text
-https://github.com/Yuki-JP/PluralEyes
+https://github.com/Yuki-JP/WaveSync
 ```
 
 3. A pagina do projeto vai abrir.
@@ -24,7 +24,7 @@ https://github.com/Yuki-JP/PluralEyes
 6. Escolha uma pasta facil, por exemplo:
 
 ```text
-C:\PluralEyes
+C:\WaveSync
 ```
 
 7. Entre na pasta extraida.
@@ -188,7 +188,7 @@ python tkinter_app.py
 ## 11. Resumo Rapido
 
 ```text
-1. Entrar em https://github.com/Yuki-JP/PluralEyes
+1. Entrar em https://github.com/Yuki-JP/WaveSync
 2. Code > Download ZIP
 3. Extrair o ZIP
 4. Rodar Instalar_Python39_E_Dependencias.bat

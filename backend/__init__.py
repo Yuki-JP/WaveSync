@@ -1,1 +1,1 @@
-"""Backend modules for the PluralEyes clone."""
+"""Backend modules for WaveSync."""

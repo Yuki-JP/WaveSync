@@ -11,7 +11,7 @@ from pathlib import Path
 
 TRACK_CHECK_OVERLAP_TOLERANCE_SECONDS = 1.0 / 30.0
 
-logger = logging.getLogger("pluraleyes.pipeline")
+logger = logging.getLogger("wavesync.pipeline")
 
 
 AUDIT_COLUMNS = [

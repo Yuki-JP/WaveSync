@@ -90,7 +90,7 @@ FILE_SPANNING_MIN_PREVIOUS_DURATION_SECONDS = 300.0
 FILE_SPANNING_LOW_Z_SCORE_THRESHOLD = 6.0
 EPSILON = 1e-12
 
-logger = logging.getLogger("pluraleyes.pipeline")
+logger = logging.getLogger("wavesync.pipeline")
 
 
 @dataclass(frozen=True)
@@ -614,7 +614,7 @@ def deduplicate_reference_files(reference_files: list[Path]) -> list[Path]:
     """
     Mantem apenas referencias mestre, removendo versoes corrigidas de drift.
 
-    Arquivos em `pluraleyes_drift_corrected` ou com `_drift_corrected` no nome
+    Arquivos com `drift_corrected` no caminho ou com `_drift_corrected` no nome
     nao entram nem como tracks fisicas nem como candidatas do Full Scan.
     """
     grouped: dict[str, list[Path]] = {}
@@ -646,7 +646,7 @@ def deduplicate_reference_files(reference_files: list[Path]) -> list[Path]:
 
 def is_drift_corrected_reference(path: Path) -> bool:
     text = str(path).replace("\\", "/").casefold()
-    return "_drift_corrected" in path.stem.casefold() or "pluraleyes_drift_corrected" in text
+    return "_drift_corrected" in path.stem.casefold() or "drift_corrected" in text
 
 
 def reference_dedupe_key(path: Path) -> str:
