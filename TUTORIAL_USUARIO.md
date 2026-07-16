@@ -204,9 +204,9 @@ python tkinter_app.py
 Se o suporte pedir um diagnostico, clique em `Enviar diagnostico para suporte`
 dentro do WaveSync.
 
-Antes de enviar, o programa mostra uma confirmacao. O pacote enviado inclui logs,
-configs, XMLs, CSVs, JSONs e um resumo do sistema. Ele nao envia audios nem
-videos do casamento.
+Antes de enviar, o programa mostra uma confirmacao. O pacote enviado inclui os
+arquivos do ultimo sync: config, XML, CSV, JSON e resumo do sistema. Ele nao
+envia audios nem videos do casamento.
 
 Se aparecer a mensagem `Suporte nao configurado`, significa que o arquivo
 `support_config.json` ainda nao foi configurado na pasta do WaveSync.

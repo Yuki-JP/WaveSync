@@ -80,7 +80,7 @@ locais da maquina do usuario e nao precisam ir para o Git.
 ## Diagnostico Para Suporte
 
 A interface tem o botao `Enviar diagnostico para suporte`. Ele cria um `.zip`
-com logs, configs, XMLs, CSVs, JSONs e `resumo_do_sistema.txt`.
+com os arquivos do ultimo sync: config, XML, CSV, JSON e `resumo_do_sistema.txt`.
 
 O pacote nao inclui audios, videos ou midias brutas. Ele pode conter nomes de
 arquivos e caminhos locais.

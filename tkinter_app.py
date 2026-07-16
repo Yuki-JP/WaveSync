@@ -661,8 +661,8 @@ class WaveSyncSimpleApp(tk.Tk):
 
         consent = messagebox.askyesno(
             "Enviar diagnostico para suporte",
-            "O WaveSync vai enviar um pacote .zip contendo logs, configs, XMLs, "
-            "CSVs, JSONs e resumo do sistema.\n\n"
+            "O WaveSync vai enviar um pacote .zip do ultimo sync, contendo "
+            "config, XML, CSV, JSON e resumo do sistema.\n\n"
             "Nao serao enviados audios, videos ou arquivos de midia bruta.\n\n"
             "O pacote pode conter nomes de arquivos e caminhos locais.\n\n"
             "Deseja enviar agora?",

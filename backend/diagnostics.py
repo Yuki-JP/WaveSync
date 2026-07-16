@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import platform
 import sys
 import urllib.error
@@ -22,6 +21,7 @@ TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_PACKAGE_BYTES = 45 * 1024 * 1024
 DEFAULT_MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024
 DIAGNOSTIC_EXTENSIONS = {".csv", ".json", ".log", ".xml"}
+LAST_SYNC_SUFFIXES = (".xml", "_audit.csv", "_audit.json")
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def create_diagnostic_package(
     included: list[str] = []
     skipped: list[str] = []
     total_input_bytes = 0
-    candidates = list(iter_diagnostic_candidates(root))
+    candidates = list(iter_last_sync_diagnostic_candidates(root))
 
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_path in candidates:
@@ -141,6 +141,7 @@ def create_diagnostic_package(
                 {
                     "generated_at": datetime.now().isoformat(timespec="seconds"),
                     "project_root": str(root),
+                    "mode": "last_sync_only",
                     "included_files": included,
                     "skipped_files": skipped,
                     "total_input_bytes": total_input_bytes,
@@ -159,24 +160,106 @@ def create_diagnostic_package(
     )
 
 
-def iter_diagnostic_candidates(project_root: Path):
-    search_roots = [
-        (project_root / "logs", True),
-        (project_root / "configs", False),
-        (project_root / "output", True),
-    ]
+def iter_last_sync_diagnostic_candidates(project_root: Path):
+    """Return only the latest sync output set plus the matching config and logs."""
+    latest_output = find_latest_sync_output(project_root)
+    yielded: set[Path] = set()
 
-    for search_root, recursive in search_roots:
-        if not search_root.exists() or not search_root.is_dir():
-            continue
-        iterator = search_root.rglob("*") if recursive else search_root.glob("*")
-        for path in iterator:
+    if latest_output is not None:
+        for path in related_output_files(latest_output):
             if is_allowed_diagnostic_file(path):
+                resolved = path.resolve()
+                yielded.add(resolved)
                 yield path
 
-    for path in project_root.glob("*.log"):
-        if is_allowed_diagnostic_file(path):
+        config_path = config_path_from_audit(latest_output)
+        if config_path is not None and config_path.exists() and config_path.resolve() not in yielded:
+            yielded.add(config_path.resolve())
+            yield config_path
+    else:
+        for path in latest_files_from_dir(project_root / "configs", recursive=False, limit=1):
+            resolved = path.resolve()
+            yielded.add(resolved)
             yield path
+
+    for path in latest_files_from_dir(project_root / "logs", recursive=True, limit=3):
+        resolved = path.resolve()
+        if resolved not in yielded:
+            yielded.add(resolved)
+            yield path
+
+    for path in latest_files_from_dir(project_root, recursive=False, limit=3):
+        resolved = path.resolve()
+        if resolved not in yielded and path.suffix.casefold() == ".log":
+            yielded.add(resolved)
+            yield path
+
+
+def find_latest_sync_output(project_root: Path) -> Path | None:
+    output_dir = project_root / "output"
+    if not output_dir.exists():
+        return None
+
+    candidates = [
+        path
+        for path in output_dir.rglob("*")
+        if path.is_file() and path.suffix.casefold() in {".xml", ".json", ".csv"}
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def related_output_files(latest_output: Path) -> list[Path]:
+    stem = sync_base_stem(latest_output)
+    parent = latest_output.parent
+    candidates = [parent / f"{stem}{suffix}" for suffix in LAST_SYNC_SUFFIXES]
+    return [path for path in candidates if path.exists() and path.is_file()]
+
+
+def sync_base_stem(path: Path) -> str:
+    name = path.name
+    for suffix in ("_audit.json", "_audit.csv", ".xml"):
+        if name.casefold().endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def config_path_from_audit(latest_output: Path) -> Path | None:
+    audit_path = latest_output.parent / f"{sync_base_stem(latest_output)}_audit.json"
+    if not audit_path.exists():
+        return None
+
+    try:
+        with audit_path.open("r", encoding="utf-8") as handle:
+            audit = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    metadata = audit.get("metadata") if isinstance(audit, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+
+    config_value = (
+        metadata.get("project_config_path")
+        or metadata.get("project_config")
+        or metadata.get("config")
+    )
+    if not config_value:
+        return None
+
+    config_path = Path(str(config_value)).expanduser()
+    if config_path.is_absolute():
+        return config_path
+    return latest_output.parents[2] / config_path if len(latest_output.parents) > 2 else config_path
+
+
+def latest_files_from_dir(directory: Path, *, recursive: bool, limit: int) -> list[Path]:
+    if not directory.exists() or not directory.is_dir():
+        return []
+    iterator = directory.rglob("*") if recursive else directory.glob("*")
+    files = [path for path in iterator if is_allowed_diagnostic_file(path)]
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
 
 
 def is_allowed_diagnostic_file(path: Path) -> bool:
@@ -205,6 +288,7 @@ def build_system_summary(
         "WaveSync - Pacote de Diagnostico",
         "=" * 72,
         f"Gerado em        : {datetime.now().isoformat(timespec='seconds')}",
+        "Modo             : ultimo sync apenas",
         f"Sistema          : {platform.platform()}",
         f"Python           : {sys.version.split()[0]}",
         f"Executavel Python: {sys.executable}",
