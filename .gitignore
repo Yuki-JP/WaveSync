@@ -43,3 +43,6 @@ tools/validate_selection.py
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Private support upload credentials
+support_config.json

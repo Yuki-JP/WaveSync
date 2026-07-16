@@ -198,3 +198,15 @@ python tkinter_app.py
 8. Escolher onde salvar o XML
 9. Importar o XML no Premiere
 ```
+
+## Enviar Diagnostico Para Suporte
+
+Se o suporte pedir um diagnostico, clique em `Enviar diagnostico para suporte`
+dentro do WaveSync.
+
+Antes de enviar, o programa mostra uma confirmacao. O pacote enviado inclui logs,
+configs, XMLs, CSVs, JSONs e um resumo do sistema. Ele nao envia audios nem
+videos do casamento.
+
+Se aparecer a mensagem `Suporte nao configurado`, significa que o arquivo
+`support_config.json` ainda nao foi configurado na pasta do WaveSync.

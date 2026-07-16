@@ -50,7 +50,7 @@ TEMP_DIR = PROJECT_ROOT / "temp"
 CACHE_ROOT_DIR = TEMP_DIR / "cache"
 AUDIO_CACHE_DIR = TEMP_DIR / "cache" / "audio"
 CACHE_CLEANUP_STATE_PATH = TEMP_DIR / "cache_cleanup_state.json"
-CACHE_CLEANUP_INTERVAL_SYNCS = 5
+CACHE_CLEANUP_INTERVAL_SYNCS = 1
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mts"}
 AUDIO_EXTENSIONS = {".wav", ".wave", ".mp3", ".aac", ".m4a", ".flac", ".ogg", ".wma"}
@@ -926,7 +926,7 @@ def write_cache_cleanup_state(state: dict) -> None:
 
 def update_cache_cleanup_after_completed_sync() -> dict:
     """
-    Conta sincronizacoes completas e limpa o cache automaticamente a cada 5.
+    Limpa o cache automaticamente apos cada sincronizacao concluida.
 
     O contador fica fora de `temp/cache`, entao sobrevivera a limpeza do cache.
     """
@@ -966,18 +966,14 @@ def log_cache_cleanup_result(result: dict) -> None:
     if result.get("cleanup_performed"):
         removed_bytes = int(result.get("removed_bytes") or 0)
         logger.info(
-            "Auto cache cleanup: %d/%d syncs. Cache limpo: %d arquivo(s), %.2f GiB removidos.",
-            CACHE_CLEANUP_INTERVAL_SYNCS,
-            CACHE_CLEANUP_INTERVAL_SYNCS,
+            "Auto cache cleanup: cache limpo apos sync concluido: %d arquivo(s), %.2f GiB removidos.",
             int(result.get("removed_files") or 0),
             removed_bytes / (1024.0**3),
         )
         return
 
     logger.info(
-        "Auto cache cleanup: %d/%d syncs ate a proxima limpeza.",
-        int(result.get("completed_since_cleanup") or 0),
-        int(result.get("interval_syncs") or CACHE_CLEANUP_INTERVAL_SYNCS),
+        "Auto cache cleanup: cache sera limpo apos cada sync concluido."
     )
 
 

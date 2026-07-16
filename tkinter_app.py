@@ -25,6 +25,13 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
+from backend.diagnostics import (
+    SupportConfig,
+    create_diagnostic_package,
+    load_support_config,
+    send_diagnostic_package,
+)
+
 
 def application_root() -> Path:
     if getattr(sys, "frozen", False):
@@ -261,8 +268,9 @@ class WaveSyncSimpleApp(tk.Tk):
         self.last_xml_output: str | None = None
         self.references: dict[str, list[str]] = {}
         self.targets: dict[str, list[str]] = {}
-        self.log_queue: queue.Queue[tuple[str, str | int]] = queue.Queue()
+        self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.running_process: subprocess.Popen[str] | None = None
+        self.diagnostic_running = False
 
         self._build()
         self.after(100, self.drain_log_queue)
@@ -313,10 +321,16 @@ class WaveSyncSimpleApp(tk.Tk):
             text="3. Sincronizar",
             command=self.run_sync,
         )
+        self.diagnostic_button = ttk.Button(
+            actions,
+            text="Enviar diagnostico para suporte",
+            command=self.send_diagnostic,
+        )
 
         self.audio_button.grid(row=0, column=0, sticky="ew", padx=(0, 8), ipady=8)
         self.video_button.grid(row=0, column=1, sticky="ew", padx=8, ipady=8)
         self.sync_button.grid(row=0, column=2, sticky="ew", padx=(8, 0), ipady=8)
+        self.diagnostic_button.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0), ipady=6)
 
         summary = ttk.LabelFrame(self, text="Arquivos escolhidos", padding=10)
         summary.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 8))
@@ -629,6 +643,63 @@ class WaveSyncSimpleApp(tk.Tk):
         )
         return path
 
+    def send_diagnostic(self) -> None:
+        if self.running_process is not None or self.diagnostic_running:
+            messagebox.showinfo("Processo em andamento", "Aguarde o processo atual terminar.")
+            return
+
+        try:
+            support_config = load_support_config(PROJECT_ROOT)
+        except Exception as exc:
+            messagebox.showerror(
+                "Suporte nao configurado",
+                f"{exc}\n\n"
+                "Crie o arquivo support_config.json na pasta do WaveSync "
+                "a partir de support_config.example.json.",
+            )
+            return
+
+        consent = messagebox.askyesno(
+            "Enviar diagnostico para suporte",
+            "O WaveSync vai enviar um pacote .zip contendo logs, configs, XMLs, "
+            "CSVs, JSONs e resumo do sistema.\n\n"
+            "Nao serao enviados audios, videos ou arquivos de midia bruta.\n\n"
+            "O pacote pode conter nomes de arquivos e caminhos locais.\n\n"
+            "Deseja enviar agora?",
+        )
+        if not consent:
+            self.status.set("Envio de diagnostico cancelado.")
+            return
+
+        self.diagnostic_running = True
+        self.set_buttons_enabled(False)
+        self.append_log("\n" + "=" * 72 + "\nDIAGNOSTICO\n" + "=" * 72 + "\n")
+        self.append_log("Gerando pacote de diagnostico...\n")
+        self.status.set("Enviando diagnostico para suporte...")
+
+        thread = threading.Thread(
+            target=self._send_diagnostic_worker,
+            args=(support_config,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _send_diagnostic_worker(self, support_config: SupportConfig) -> None:
+        try:
+            package = create_diagnostic_package(PROJECT_ROOT)
+            self.log_queue.put(("line", f"Pacote: {package.path}\n"))
+            self.log_queue.put(("line", f"Arquivos incluidos: {len(package.included_files)}\n"))
+            if package.skipped_files:
+                self.log_queue.put(("line", f"Arquivos ignorados: {len(package.skipped_files)}\n"))
+
+            result = send_diagnostic_package(package.path, support_config)
+            suffix = f" message_id={result.message_id}" if result.message_id else ""
+            self.log_queue.put(("line", f"[OK] Diagnostico enviado para suporte.{suffix}\n"))
+            self.log_queue.put(("diag_done", 0))
+        except Exception as exc:
+            self.log_queue.put(("line", f"[ERROR] Falha ao enviar diagnostico: {exc}\n"))
+            self.log_queue.put(("diag_done", 1))
+
     def run_sync(self) -> None:
         if self.running_process is not None:
             messagebox.showinfo("Sync em andamento", "Aguarde o processo atual terminar.")
@@ -699,6 +770,15 @@ class WaveSyncSimpleApp(tk.Tk):
                     else:
                         self.status.set("Sync falhou. Veja o log abaixo.")
                         self.append_log(f"\n[FAIL] Sync finalizado com exit={return_code}.\n")
+                elif kind == "diag_done":
+                    return_code = int(value)
+                    self.diagnostic_running = False
+                    self.set_buttons_enabled(True)
+                    if return_code == 0:
+                        self.status.set("Diagnostico enviado para suporte.")
+                        messagebox.showinfo("Diagnostico enviado", "Pacote de diagnostico enviado para suporte.")
+                    else:
+                        self.status.set("Falha ao enviar diagnostico. Veja o log abaixo.")
         except queue.Empty:
             pass
         self.after(100, self.drain_log_queue)
@@ -708,6 +788,7 @@ class WaveSyncSimpleApp(tk.Tk):
         self.audio_button.configure(state=state)
         self.video_button.configure(state=state)
         self.sync_button.configure(state=state)
+        self.diagnostic_button.configure(state=state)
         self.clear_audio_button.configure(state=state)
         self.remove_audio_selected_button.configure(state=state)
         self.clear_video_button.configure(state=state)

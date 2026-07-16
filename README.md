@@ -33,6 +33,8 @@ main.py                               Motor principal de sincronizacao
 backend/audio_processor.py            Extracao e features DSP
 backend/xml_generator.py              Geracao do XML para Premiere
 backend/audit_report.py               Relatorios CSV/JSON
+backend/diagnostics.py                Pacote de diagnostico e envio opcional para suporte
+support_config.example.json           Exemplo de config privada para envio de diagnostico
 tools/install_python39_deps.ps1       Instalador chamado pelo .bat
 tools/make_config.py                  Gerador de config usado pela interface
 ```
@@ -74,3 +76,19 @@ output/
 
 Essas pastas guardam configs temporarios, cache DSP, XMLs e auditorias. Elas sao
 locais da maquina do usuario e nao precisam ir para o Git.
+
+## Diagnostico Para Suporte
+
+A interface tem o botao `Enviar diagnostico para suporte`. Ele cria um `.zip`
+com logs, configs, XMLs, CSVs, JSONs e `resumo_do_sistema.txt`.
+
+O pacote nao inclui audios, videos ou midias brutas. Ele pode conter nomes de
+arquivos e caminhos locais.
+
+Para ativar o envio automatico via Telegram Bot API:
+
+1. Copie `support_config.example.json` para `support_config.json`.
+2. Preencha `telegram_bot_token` e `telegram_chat_id`.
+3. Mantenha `support_config.json` fora do Git. Ele ja esta no `.gitignore`.
+
+Sem `support_config.json`, o botao informa que o suporte nao esta configurado.

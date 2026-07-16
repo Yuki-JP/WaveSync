@@ -596,14 +596,14 @@ def format_auto_cache_cleanup(value: object) -> str:
         return "n/a"
     if value.get("error"):
         return f"falhou ({value.get('error')})"
-    interval = int(value.get("interval_syncs") or 5)
+    interval = int(value.get("interval_syncs") or 1)
     if value.get("cleanup_performed"):
         removed_files = int(value.get("removed_files") or 0)
         removed_bytes = int(value.get("removed_bytes") or 0)
-        return f"limpo apos {interval} syncs | {removed_files} arquivo(s), {removed_bytes / (1024.0**3):.2f} GiB"
+        return f"limpo apos cada sync | {removed_files} arquivo(s), {removed_bytes / (1024.0**3):.2f} GiB"
     completed = int(value.get("completed_since_cleanup") or 0)
     remaining = max(0, interval - completed)
-    return f"{completed}/{interval} syncs | limpa em {remaining}"
+    return f"limpa apos cada sync | pendente: {remaining}"
 
 
 def format_offset(offset_seconds: float) -> str:
