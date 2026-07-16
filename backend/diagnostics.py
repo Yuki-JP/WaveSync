@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
 import urllib.error
@@ -141,6 +142,7 @@ def create_diagnostic_package(
                 {
                     "generated_at": datetime.now().isoformat(timespec="seconds"),
                     "project_root": str(root),
+                    "machine_name": get_machine_name(),
                     "mode": "last_sync_only",
                     "included_files": included,
                     "skipped_files": skipped,
@@ -277,6 +279,15 @@ def relative_name(project_root: Path, path: Path) -> str:
         return path.name
 
 
+def get_machine_name() -> str:
+    """Return the Windows device name shown in system settings when available."""
+    return (
+        platform.node()
+        or os.environ.get("COMPUTERNAME")
+        or os.environ.get("HOSTNAME")
+        or "desconhecido"
+    )
+
 def build_system_summary(
     project_root: Path,
     *,
@@ -289,6 +300,7 @@ def build_system_summary(
         "=" * 72,
         f"Gerado em        : {datetime.now().isoformat(timespec='seconds')}",
         "Modo             : ultimo sync apenas",
+        f"Nome da maquina : {get_machine_name()}",
         f"Sistema          : {platform.platform()}",
         f"Python           : {sys.version.split()[0]}",
         f"Executavel Python: {sys.executable}",
