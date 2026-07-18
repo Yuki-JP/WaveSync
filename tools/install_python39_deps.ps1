@@ -14,7 +14,6 @@ $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $VenvPythonw = Join-Path $VenvDir "Scripts\pythonw.exe"
 $AppScript = Join-Path $ProjectRoot "tkinter_app.py"
 $SupportRelayConfig = Join-Path $ProjectRoot "support_relay.json"
-$SupportConfigExample = Join-Path $ProjectRoot "support_config.example.json"
 $SupportConfigAppData = if ($env:APPDATA) { Join-Path (Join-Path $env:APPDATA "WaveSync") "support_config.json" } else { $null }
 
 function Write-Step {
@@ -211,9 +210,6 @@ function Install-SupportConfig {
 
     Write-Host "[WARN] Suporte automatico nao configurado nesta copia."
     Write-Host "[WARN] O botao de diagnostico vai gerar ZIP local, mas nao enviara automaticamente."
-    if (Test-Path $SupportConfigExample) {
-        Write-Host "[INFO] Exemplo de config privada: $SupportConfigExample"
-    }
 }
 
 function Open-App {

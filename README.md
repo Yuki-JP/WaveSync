@@ -35,11 +35,6 @@ backend/xml_generator.py              Geracao do XML para Premiere
 backend/audit_report.py               Relatorios CSV/JSON
 backend/diagnostics.py                Pacote de diagnostico e envio para suporte
 support_relay.json                    Endereco publico do relay de suporte local
-support_config.example.json           Exemplo de config privada da maquina de suporte
-tools/support_relay.py                Relay local que envia diagnosticos ao Telegram
-tools/install_support_relay_startup.ps1 Registra o relay para iniciar oculto com o Windows
-Instalar_Suporte_WaveSync_Inicializacao.bat  Instala a inicializacao oculta do relay
-Remover_Suporte_WaveSync_Inicializacao.bat   Remove a inicializacao oculta do relay
 tools/install_python39_deps.ps1       Instalador chamado pelo .bat
 tools/make_config.py                  Gerador de config usado pela interface
 ```
@@ -93,31 +88,3 @@ locais.
 
 Para usuarios do escritorio, o envio automatico usa `support_relay.json`, que
 aponta para a maquina de suporte na rede local. Esse arquivo nao contem token.
-
-Na maquina de suporte, crie o arquivo privado `support_config.json` a partir de
-`support_config.example.json`, preencha `telegram_bot_token` e `telegram_chat_id`.
-Mantenha `support_config.json` fora do Git. Ele ja esta no `.gitignore`.
-
-## Relay Oculto Na Maquina De Suporte
-
-Na maquina que recebe os diagnosticos, crie primeiro o `support_config.json`
-privado com `telegram_bot_token` e `telegram_chat_id`. Depois rode uma vez:
-
-```text
-Instalar_Suporte_WaveSync_Inicializacao.bat
-```
-
-Esse instalador cria a tarefa `WaveSync Support Relay` no Windows. A tarefa sobe
-automaticamente a cada login usando `pythonw.exe`, sem janela de CMD aberta.
-
-O log do relay fica em:
-
-```text
-temp\support_relay.log
-```
-
-Para remover essa inicializacao automatica, rode:
-
-```text
-Remover_Suporte_WaveSync_Inicializacao.bat
-```

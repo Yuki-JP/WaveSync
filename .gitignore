@@ -46,3 +46,10 @@ Thumbs.db
 
 # Private support upload credentials
 support_config.json
+
+# Local support-only relay files
+Instalar_Suporte_WaveSync_Inicializacao.bat
+Remover_Suporte_WaveSync_Inicializacao.bat
+support_config.example.json
+tools/install_support_relay_startup.ps1
+tools/support_relay.py
