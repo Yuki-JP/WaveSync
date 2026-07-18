@@ -17,6 +17,7 @@ from pathlib import Path
 
 DIAGNOSTIC_DIR = Path("temp") / "diagnostics"
 SUPPORT_CONFIG_FILENAME = "support_config.json"
+SUPPORT_CONFIG_ENV_VAR = "WAVESYNC_SUPPORT_CONFIG"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_PACKAGE_BYTES = 45 * 1024 * 1024
@@ -48,11 +49,50 @@ class TelegramUploadResult:
     description: str | None
 
 
+def support_config_candidate_paths(project_root: str | Path) -> list[Path]:
+    root = Path(project_root).resolve()
+    candidates: list[Path] = []
+
+    env_config = os.environ.get(SUPPORT_CONFIG_ENV_VAR)
+    if env_config:
+        candidates.append(Path(env_config).expanduser())
+
+    candidates.append(root / SUPPORT_CONFIG_FILENAME)
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "WaveSync" / SUPPORT_CONFIG_FILENAME)
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "WaveSync" / SUPPORT_CONFIG_FILENAME)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        normalized = str(path).casefold()
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(path)
+    return unique
+
+
+def find_support_config_path(project_root: str | Path) -> Path | None:
+    for path in support_config_candidate_paths(project_root):
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
 def load_support_config(project_root: str | Path) -> SupportConfig:
-    config_path = Path(project_root) / SUPPORT_CONFIG_FILENAME
-    if not config_path.exists():
+    config_path = find_support_config_path(project_root)
+    if config_path is None:
+        searched = "\n".join(
+            f"- {path}" for path in support_config_candidate_paths(project_root)
+        )
         raise FileNotFoundError(
-            f"Arquivo de suporte nao encontrado: {config_path}. "
+            "Arquivo de suporte nao encontrado. Locais procurados:\n"
+            f"{searched}\n\n"
             "Crie esse arquivo a partir de support_config.example.json."
         )
 

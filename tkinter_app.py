@@ -647,34 +647,46 @@ class WaveSyncSimpleApp(tk.Tk):
             messagebox.showinfo("Processo em andamento", "Aguarde o processo atual terminar.")
             return
 
+        support_config: SupportConfig | None = None
+        config_error: Exception | None = None
         try:
             support_config = load_support_config(PROJECT_ROOT)
         except Exception as exc:
-            messagebox.showerror(
-                "Suporte nao configurado",
-                f"{exc}\n\n"
-                "Crie o arquivo support_config.json na pasta do WaveSync "
-                "a partir de support_config.example.json.",
-            )
-            return
+            config_error = exc
 
-        consent = messagebox.askyesno(
-            "Enviar diagnostico para suporte",
-            "O WaveSync vai enviar um pacote .zip do ultimo sync, contendo "
-            "config, XML, CSV, JSON e resumo do sistema.\n\n"
-            "Nao serao enviados audios, videos ou arquivos de midia bruta.\n\n"
-            "O pacote pode conter nomes de arquivos e caminhos locais.\n\n"
-            "Deseja enviar agora?",
-        )
-        if not consent:
-            self.status.set("Envio de diagnostico cancelado.")
-            return
+        if support_config is None:
+            consent = messagebox.askyesno(
+                "Suporte nao configurado",
+                f"{config_error}\n\n"
+                "O WaveSync ainda pode gerar um pacote .zip local do ultimo sync, "
+                "sem enviar pela internet.\n\n"
+                "Depois voce pode mandar esse .zip manualmente para o suporte.\n\n"
+                "Deseja gerar o ZIP agora?",
+            )
+            if not consent:
+                self.status.set("Diagnostico cancelado.")
+                return
+        else:
+            consent = messagebox.askyesno(
+                "Enviar diagnostico para suporte",
+                "O WaveSync vai enviar um pacote .zip do ultimo sync, contendo "
+                "config, XML, CSV, JSON e resumo do sistema.\n\n"
+                "Nao serao enviados audios, videos ou arquivos de midia bruta.\n\n"
+                "O pacote pode conter nomes de arquivos e caminhos locais.\n\n"
+                "Deseja enviar agora?",
+            )
+            if not consent:
+                self.status.set("Envio de diagnostico cancelado.")
+                return
 
         self.diagnostic_running = True
         self.set_buttons_enabled(False)
         self.append_log("\n" + "=" * 72 + "\nDIAGNOSTICO\n" + "=" * 72 + "\n")
         self.append_log("Gerando pacote de diagnostico...\n")
-        self.status.set("Enviando diagnostico para suporte...")
+        if support_config is None:
+            self.status.set("Gerando diagnostico local...")
+        else:
+            self.status.set("Enviando diagnostico para suporte...")
 
         thread = threading.Thread(
             target=self._send_diagnostic_worker,
@@ -683,7 +695,7 @@ class WaveSyncSimpleApp(tk.Tk):
         )
         thread.start()
 
-    def _send_diagnostic_worker(self, support_config: SupportConfig) -> None:
+    def _send_diagnostic_worker(self, support_config: SupportConfig | None) -> None:
         try:
             package = create_diagnostic_package(PROJECT_ROOT)
             self.log_queue.put(("line", f"Pacote: {package.path}\n"))
@@ -691,13 +703,21 @@ class WaveSyncSimpleApp(tk.Tk):
             if package.skipped_files:
                 self.log_queue.put(("line", f"Arquivos ignorados: {len(package.skipped_files)}\n"))
 
+            if support_config is None:
+                self.log_queue.put((
+                    "line",
+                    "[OK] Diagnostico salvo localmente. Envie o ZIP manualmente para o suporte.\n",
+                ))
+                self.log_queue.put(("diag_done", {"return_code": 0, "sent": False, "path": str(package.path)}))
+                return
+
             result = send_diagnostic_package(package.path, support_config)
             suffix = f" message_id={result.message_id}" if result.message_id else ""
             self.log_queue.put(("line", f"[OK] Diagnostico enviado para suporte.{suffix}\n"))
-            self.log_queue.put(("diag_done", 0))
+            self.log_queue.put(("diag_done", {"return_code": 0, "sent": True, "path": str(package.path)}))
         except Exception as exc:
-            self.log_queue.put(("line", f"[ERROR] Falha ao enviar diagnostico: {exc}\n"))
-            self.log_queue.put(("diag_done", 1))
+            self.log_queue.put(("line", f"[ERROR] Falha ao gerar/enviar diagnostico: {exc}\n"))
+            self.log_queue.put(("diag_done", {"return_code": 1, "sent": False, "path": ""}))
 
     def run_sync(self) -> None:
         if self.running_process is not None:
@@ -770,14 +790,29 @@ class WaveSyncSimpleApp(tk.Tk):
                         self.status.set("Sync falhou. Veja o log abaixo.")
                         self.append_log(f"\n[FAIL] Sync finalizado com exit={return_code}.\n")
                 elif kind == "diag_done":
-                    return_code = int(value)
+                    if isinstance(value, dict):
+                        return_code = int(value.get("return_code", 1))
+                        sent = bool(value.get("sent"))
+                        package_path = str(value.get("path") or "")
+                    else:
+                        return_code = int(value)
+                        sent = return_code == 0
+                        package_path = ""
                     self.diagnostic_running = False
                     self.set_buttons_enabled(True)
-                    if return_code == 0:
+                    if return_code == 0 and sent:
                         self.status.set("Diagnostico enviado para suporte.")
                         messagebox.showinfo("Diagnostico enviado", "Pacote de diagnostico enviado para suporte.")
+                    elif return_code == 0:
+                        self.status.set("Diagnostico salvo localmente.")
+                        messagebox.showinfo(
+                            "Diagnostico salvo",
+                            "Pacote de diagnostico salvo localmente:\n"
+                            f"{package_path}\n\n"
+                            "Envie esse ZIP manualmente para o suporte.",
+                        )
                     else:
-                        self.status.set("Falha ao enviar diagnostico. Veja o log abaixo.")
+                        self.status.set("Falha ao gerar/enviar diagnostico. Veja o log abaixo.")
         except queue.Empty:
             pass
         self.after(100, self.drain_log_queue)

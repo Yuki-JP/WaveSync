@@ -85,10 +85,18 @@ com os arquivos do ultimo sync: config, XML, CSV, JSON e `resumo_do_sistema.txt`
 O pacote nao inclui audios, videos ou midias brutas. Ele pode conter nomes de
 arquivos e caminhos locais.
 
-Para ativar o envio automatico via Telegram Bot API:
+Para ativar o envio automatico via Telegram Bot API, crie um arquivo privado
+`support_config.json` a partir de `support_config.example.json` e preencha
+`telegram_bot_token` e `telegram_chat_id`.
 
-1. Copie `support_config.example.json` para `support_config.json`.
-2. Preencha `telegram_bot_token` e `telegram_chat_id`.
-3. Mantenha `support_config.json` fora do Git. Ele ja esta no `.gitignore`.
+O WaveSync procura esse arquivo nestes locais:
 
-Sem `support_config.json`, o botao informa que o suporte nao esta configurado.
+1. Na pasta do WaveSync, ao lado de `tkinter_app.py`.
+2. Em `%APPDATA%\WaveSync\support_config.json`.
+3. Em `%LOCALAPPDATA%\WaveSync\support_config.json`.
+4. No caminho apontado pela variavel de ambiente `WAVESYNC_SUPPORT_CONFIG`.
+
+Mantenha `support_config.json` fora do Git. Ele ja esta no `.gitignore`.
+
+Sem `support_config.json`, o botao nao envia pela internet, mas ainda gera um
+`.zip` local do ultimo sync para envio manual ao suporte.

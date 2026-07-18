@@ -208,5 +208,10 @@ Antes de enviar, o programa mostra uma confirmacao. O pacote enviado inclui os
 arquivos do ultimo sync: config, XML, CSV, JSON e resumo do sistema. Ele nao
 envia audios nem videos do casamento.
 
-Se aparecer a mensagem `Suporte nao configurado`, significa que o arquivo
-`support_config.json` ainda nao foi configurado na pasta do WaveSync.
+Quando o suporte automatico estiver configurado, o WaveSync envia esse pacote
+pelo Telegram. O arquivo privado `support_config.json` pode ficar na pasta do
+WaveSync ou em `%APPDATA%\WaveSync\support_config.json`.
+
+Se aparecer `Suporte nao configurado`, o WaveSync ainda consegue gerar um `.zip`
+local do ultimo sync. Nesse caso, confirme a geracao e envie esse `.zip`
+manualmente para o suporte.
