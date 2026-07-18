@@ -10,6 +10,9 @@ from pathlib import Path
 
 
 TRACK_CHECK_OVERLAP_TOLERANCE_SECONDS = 1.0 / 30.0
+REFERENCE_COVERAGE_MIN_SECONDS = 10.0
+REFERENCE_COVERAGE_MIN_RATIO = 0.05
+SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS = 10.0
 
 logger = logging.getLogger("wavesync.pipeline")
 
@@ -23,6 +26,11 @@ AUDIT_COLUMNS = [
     "final_offset_seconds",
     "final_offset_timecode",
     "timeline_end_seconds",
+    "sync_quality_status",
+    "sync_quality_reasons",
+    "reference_coverage_status",
+    "reference_coverage_seconds",
+    "reference_coverage_ratio",
     "extracted_wav_path",
     "cache_hit_wav",
     "cache_hit_features",
@@ -87,6 +95,7 @@ def write_sync_audit_reports(
 ) -> tuple[Path, Path]:
     csv_path, json_path = resolve_audit_output_paths(output_xml_path, audit_output)
     rows = build_sync_audit_rows(sync_results)
+    sync_quality = annotate_sync_quality(rows, sync_results.get("references") or [])
     camera_summary = build_camera_audit_summary(rows)
     track_check = build_camera_track_check(rows)
 
@@ -102,12 +111,14 @@ def write_sync_audit_reports(
         "json": str(json_path),
     }
     metadata["track_check"] = track_check
+    metadata["sync_quality"] = sync_quality
     json_payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "metadata": metadata,
         "references": sync_results.get("references") or [],
         "camera_summary": camera_summary,
         "track_check": track_check,
+        "sync_quality": sync_quality,
         "rows": rows,
     }
     json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +344,220 @@ def annotate_previous_clip_gaps(rows: list[dict]) -> None:
             previous_row = row
 
 
+
+def annotate_sync_quality(rows: list[dict], references: list[dict]) -> dict:
+    intervals = reference_coverage_intervals(references)
+    issues: list[dict] = []
+    counts = {"OK": 0, "ATENCAO": 0, "RISCO_ALTO": 0, "N_D": 0}
+
+    for row in rows:
+        if row.get("status") != "ok":
+            row["sync_quality_status"] = "N_D"
+            row["sync_quality_reasons"] = row.get("skip_reason") or "clipe_nao_sincronizado"
+            row["reference_coverage_status"] = "not_synced"
+            row["reference_coverage_seconds"] = None
+            row["reference_coverage_ratio"] = None
+            counts["N_D"] += 1
+            continue
+
+        coverage = reference_coverage_for_row(row, intervals)
+        row["reference_coverage_status"] = coverage["status"]
+        row["reference_coverage_seconds"] = coverage["overlap_seconds"]
+        row["reference_coverage_ratio"] = coverage["coverage_ratio"]
+
+        status, reasons = classify_sync_quality(row, coverage)
+        row["sync_quality_status"] = status
+        row["sync_quality_reasons"] = "; ".join(reasons) if reasons else "ok"
+        counts[status] = counts.get(status, 0) + 1
+        if status != "OK":
+            issues.append(
+                {
+                    "status": status,
+                    "file_name": row.get("file_name"),
+                    "camera_name": row.get("camera_name"),
+                    "reasons": reasons,
+                    "reference_coverage_status": coverage["status"],
+                    "reference_coverage_seconds": coverage["overlap_seconds"],
+                    "reference_coverage_ratio": coverage["coverage_ratio"],
+                    "final_offset_seconds": row.get("final_offset_seconds"),
+                    "timeline_end_seconds": row.get("timeline_end_seconds"),
+                    "sync_method": row.get("sync_method"),
+                }
+            )
+
+    high_risk_count = counts.get("RISCO_ALTO", 0)
+    attention_count = counts.get("ATENCAO", 0)
+    if high_risk_count:
+        overall_status = f"RISCO_ALTO ({high_risk_count})"
+    elif attention_count:
+        overall_status = f"ATENCAO ({attention_count})"
+    else:
+        overall_status = "OK"
+
+    return {
+        "overall_status": overall_status,
+        "counts": counts,
+        "issue_count": len(issues),
+        "high_risk_count": high_risk_count,
+        "attention_count": attention_count,
+        "reference_coverage_min_seconds": REFERENCE_COVERAGE_MIN_SECONDS,
+        "reference_coverage_min_ratio": REFERENCE_COVERAGE_MIN_RATIO,
+        "large_dsp_delta_seconds": SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS,
+        "issues": issues,
+    }
+
+
+def reference_coverage_intervals(references: list[dict]) -> list[dict]:
+    intervals: list[dict] = []
+    for reference in references:
+        start = first_number(reference.get("timeline_offset_seconds"))
+        duration = first_number(
+            reference.get("repaired_duration_seconds"),
+            reference.get("duration_seconds"),
+        )
+        if start is None or duration is None:
+            continue
+        end = start + duration
+        intervals.append(
+            {
+                "start": start,
+                "end": end,
+                "duration": duration,
+                "name": reference.get("name"),
+                "track_name": reference.get("track_name"),
+                "path": reference.get("path"),
+            }
+        )
+    return sorted(intervals, key=lambda item: (item["start"], item["end"]))
+
+
+def reference_coverage_for_row(row: dict, intervals: list[dict]) -> dict:
+    start = first_number(row.get("final_offset_seconds"))
+    duration = first_number(row.get("duration_seconds"))
+    if start is None or duration is None:
+        return {
+            "status": "unknown",
+            "overlap_seconds": None,
+            "coverage_ratio": None,
+        }
+    if not intervals:
+        return {
+            "status": "no_references",
+            "overlap_seconds": None,
+            "coverage_ratio": None,
+        }
+
+    end = start + duration
+    earliest_start = min(interval["start"] for interval in intervals)
+    latest_end = max(interval["end"] for interval in intervals)
+    overlap_seconds = 0.0
+    for interval in intervals:
+        overlap_seconds = max(
+            overlap_seconds,
+            min(end, interval["end"]) - max(start, interval["start"]),
+        )
+    overlap_seconds = max(0.0, overlap_seconds)
+    coverage_ratio = overlap_seconds / max(duration, 1e-9)
+    required_overlap = min(
+        REFERENCE_COVERAGE_MIN_SECONDS,
+        max(1.0, duration * REFERENCE_COVERAGE_MIN_RATIO),
+    )
+
+    if overlap_seconds <= 0.0:
+        if end <= earliest_start:
+            status = "before_reference_start"
+        elif start >= latest_end:
+            status = "after_reference_end"
+        else:
+            status = "outside_reference_coverage"
+    elif overlap_seconds < required_overlap:
+        status = "partial_reference_coverage"
+    elif start < earliest_start:
+        status = "covered_after_camera_preroll"
+    elif end > latest_end + REFERENCE_COVERAGE_MIN_SECONDS:
+        status = "covered_with_tail_after_reference"
+    else:
+        status = "covered"
+
+    return {
+        "status": status,
+        "overlap_seconds": overlap_seconds,
+        "coverage_ratio": coverage_ratio,
+    }
+
+
+def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    high_risk = False
+    attention = False
+
+    coverage_status = str(coverage.get("status") or "unknown")
+    peer_confirmed = is_peer_confirmed(row)
+    if coverage_status in {
+        "after_reference_end",
+        "before_reference_start",
+        "outside_reference_coverage",
+        "no_references",
+    }:
+        if peer_confirmed:
+            attention = True
+            reasons.append(f"sem_lapela_confirmado_por_camera:{coverage_status}")
+        else:
+            high_risk = True
+            reasons.append(f"referencia_sem_cobertura:{coverage_status}")
+    elif coverage_status in {
+        "partial_reference_coverage",
+        "covered_with_tail_after_reference",
+    }:
+        attention = True
+        reasons.append(f"cobertura_parcial:{coverage_status}")
+
+    final_vs_individual = first_number(row.get("individual_vs_final_delta_seconds"))
+    sync_method = str(row.get("sync_method") or "")
+    local_delta = first_number(row.get("camera_local_refine_delta_seconds"))
+    local_z = first_number(row.get("camera_local_refine_z_score"))
+    peer_delta = first_number(row.get("camera_peer_refine_delta_seconds"))
+    peer_z = first_number(row.get("camera_peer_refine_z_score"))
+    final_z = first_number(row.get("correlation_z_score"))
+
+    local_or_peer_confirmed = (
+        local_delta is not None
+        and abs(local_delta) <= 0.5
+        and local_z is not None
+        and local_z >= 1.15
+    ) or (
+        peer_delta is not None
+        and abs(peer_delta) <= 0.8
+        and peer_z is not None
+        and peer_z >= 2.5
+    )
+
+    if (
+        final_vs_individual is not None
+        and abs(final_vs_individual) > SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS
+        and "native" in sync_method
+        and not local_or_peer_confirmed
+    ):
+        if final_z is not None and final_z >= 8.0:
+            high_risk = True
+        else:
+            attention = True
+        reasons.append(
+            "offset_final_diverge_muito_do_dsp:"
+            f"{final_vs_individual:.3f}s"
+        )
+
+    if final_z is not None and final_z < 4.0:
+        high_risk = True
+        reasons.append(f"z_score_baixo:{final_z:.2f}")
+
+    if high_risk:
+        return "RISCO_ALTO", reasons
+    if attention:
+        return "ATENCAO", reasons
+    return "OK", reasons
+
+
 def build_camera_audit_summary(rows: list[dict]) -> list[dict]:
     grouped: dict[str, list[dict]] = {}
     for row in rows:
@@ -524,6 +749,8 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
     failed = [path for path, offset in offsets.items() if offset is None]
     audit_reports = metadata.get("audit_reports") or {}
     track_check = metadata.get("track_check") or {}
+    sync_quality = metadata.get("sync_quality") or {}
+    sync_quality_status = sync_quality.get("overall_status", "n/a")
     track_overlap_count = int(track_check.get("total_overlap_count") or 0)
     reference_count = int(metadata.get("reference_count") or 0)
     success_count = len(successful)
@@ -551,6 +778,7 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
         f"Clock Model: {metadata.get('use_camera_clock_model', False)}",
         f"Spanning   : {metadata.get('spanning_continuity_adjustment_count', 0)} ajuste(s)",
         f"TrackCheck : {'OK' if track_overlap_count == 0 else f'{track_overlap_count} overlap(s)'}",
+        f"SyncCheck  : {sync_quality_status}",
         f"Cache DSP  : refs {reference_cache_hits}/{reference_count} | targets {target_cache_hits}/{success_count}",
         f"Cache Auto : {cache_auto_summary}",
         f"XML        : {output_xml_path}",
@@ -573,6 +801,21 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
         for path in failed:
             lines.append(f"  [FAIL]  {Path(path).name}")
 
+    sync_quality_issues = sync_quality.get("issues") or []
+    if sync_quality_issues:
+        lines.append("")
+        lines.append("Alertas de qualidade do sync:")
+        for issue in sync_quality_issues[:8]:
+            reasons = ", ".join(issue.get("reasons") or [])
+            lines.append(
+                "  "
+                f"[{issue.get('status')}] {issue.get('file_name')} | "
+                f"{issue.get('camera_name')} | {reasons}"
+            )
+        if len(sync_quality_issues) > 8:
+            lines.append(
+                f"  ... mais {len(sync_quality_issues) - 8} alerta(s) no audit JSON/CSV"
+            )
     if track_overlap_count:
         lines.append("")
         lines.append("Sobreposicoes detectadas no TrackCheck:")
@@ -661,6 +904,25 @@ def first_text(*values: object) -> str | None:
         if text:
             return text
     return None
+
+
+
+
+def is_peer_confirmed(row: dict) -> bool:
+    method = str(row.get("sync_method") or "")
+    if "peer" not in method:
+        return False
+    peer_z = first_number(row.get("camera_peer_refine_z_score"))
+    peer_prominence = first_number(row.get("camera_peer_refine_prominence_ratio"))
+    peer_overlap = first_number(row.get("camera_peer_refine_overlap_seconds"))
+    return (
+        peer_z is not None
+        and peer_z >= 8.0
+        and peer_prominence is not None
+        and peer_prominence >= 2.0
+        and peer_overlap is not None
+        and peer_overlap >= 10.0
+    )
 
 
 def median_value(values: list[float]) -> float | None:

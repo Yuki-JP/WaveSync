@@ -1,4 +1,4 @@
-﻿"""
+"""
 CLI principal do sincronizador multicamera.
 
 Responsabilidades deste modulo:
@@ -57,6 +57,9 @@ AUDIO_EXTENSIONS = {".wav", ".wave", ".mp3", ".aac", ".m4a", ".flac", ".ogg", ".
 TEMPORARY_SUFFIXES = {".tmp", ".temp", ".part", ".crdownload"}
 
 HYBRID_WINDOW_SECONDS = 300.0
+IGNORE_METADATA_ASSIST_WINDOW_SECONDS = 300.0
+IGNORE_METADATA_ASSIST_MAX_FULL_SCAN_DEVIATION_SECONDS = 300.0
+METADATA_ANCHOR_MIN_REFERENCE_OVERLAP_SECONDS = 10.0
 MIN_CONFIDENCE_Z_SCORE = 8.0
 MIN_CONFIDENCE_PROMINENCE = 1.15
 MIN_FULL_SCAN_Z_SCORE = 4.0
@@ -76,15 +79,39 @@ CAMERA_CLOCK_MAX_ABS_DRIFT_PPM = 5_000.0
 CAMERA_LOCAL_REFINE_WINDOW_SECONDS = 3.0
 CAMERA_LOCAL_REFINE_MAX_DELTA_SECONDS = 1.5
 CAMERA_LOCAL_REFINE_MIN_Z_SCORE = 4.0
+CAMERA_LOCAL_REFINE_WEAK_MAX_DELTA_SECONDS = 0.5
+CAMERA_LOCAL_REFINE_WEAK_MIN_Z_SCORE = 1.15
+CAMERA_LOCAL_REFINE_WEAK_MIN_PROMINENCE = 2.0
+CAMERA_LOCAL_REFINE_MEDIUM_MAX_DELTA_SECONDS = 1.0
+CAMERA_LOCAL_REFINE_MEDIUM_MIN_Z_SCORE = 2.5
+CAMERA_LOCAL_REFINE_MEDIUM_MIN_PROMINENCE = 2.0
+CAMERA_WEAK_INDIVIDUAL_MAX_DELTA_SECONDS = 1.0
+CAMERA_WEAK_INDIVIDUAL_MIN_Z_SCORE = 2.5
+CAMERA_WEAK_INDIVIDUAL_MIN_PROMINENCE = 1.2
 CAMERA_LOCAL_REFINE_STRONG_Z_SCORE = 8.0
 CAMERA_LOCAL_REFINE_STRONG_PROMINENCE = 2.0
 CAMERA_POST_CUT_NATIVE_LATE_THRESHOLD_SECONDS = 0.35
 CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS = 120.0
+CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS = 3.0
+CAMERA_POST_CUT_LOCAL_MIN_PROMINENCE = 1.2
 CAMERA_PEER_REFINE_WINDOW_SECONDS = 8.0
 CAMERA_PEER_REFINE_MAX_DELTA_SECONDS = 0.8
 CAMERA_PEER_REFINE_MIN_Z_SCORE = 2.5
 CAMERA_PEER_REFINE_MIN_PROMINENCE = 1.2
 CAMERA_PEER_REFINE_MIN_OVERLAP_SECONDS = 10.0
+CAMERA_PEER_GAP_BACKFILL_TOLERANCE_SECONDS = 0.15
+CAMERA_PEER_GAP_DIRECT_TRIM_WINDOW_SECONDS = 3.0
+CAMERA_PEER_GAP_DIRECT_TRIM_MAX_DELTA_SECONDS = 0.4
+CAMERA_PEER_GAP_DIRECT_TRIM_MIN_Z_SCORE = 0.75
+CAMERA_PEER_GAP_DIRECT_TRIM_MIN_PROMINENCE = 0.5
+CAMERA_PEER_BRIDGE_MIN_Z_SCORE = 8.0
+CAMERA_PEER_BRIDGE_MIN_PROMINENCE = 2.0
+CAMERA_PEER_BRIDGE_MIN_OVERLAP_SECONDS = 10.0
+CAMERA_PEER_BLOCK_BRIDGE_MIN_Z_SCORE = 8.0
+CAMERA_PEER_BLOCK_BRIDGE_MIN_PROMINENCE = 2.0
+CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS = 10.0
+CAMERA_PEER_BLOCK_BRIDGE_BASE_TOLERANCE_SECONDS = 3.0
+CAMERA_PEER_BLOCK_BRIDGE_MIN_METADATA_IMPROVEMENT_SECONDS = 30.0
 FILE_SPANNING_TOLERANCE_SECONDS = 3.0
 FILE_SPANNING_MIN_PREVIOUS_DURATION_SECONDS = 300.0
 FILE_SPANNING_LOW_Z_SCORE_THRESHOLD = 6.0
@@ -219,6 +246,16 @@ class PeerCameraRefinement:
     result: CorrelationResult
     final_offset_seconds: float
     delta_from_current_seconds: float
+    overlap_seconds: float
+
+
+@dataclass(frozen=True)
+class CameraBlockBridgeCandidate:
+    placement: CameraBlockPlacement
+    peer: CameraBlockPlacement
+    result: CorrelationResult
+    final_offset_seconds: float
+    base_offset_seconds: float
     overlap_seconds: float
 
 
@@ -1381,27 +1418,97 @@ def clean_reference_source_name(value: str) -> str:
 def find_best_reference_match(
     references: list[PreparedReference],
     target_features: object,
+    *,
+    master_reference: PreparedReference | None = None,
+    estimated_master_offset_seconds: float | None = None,
 ) -> tuple[PreparedReference, CorrelationResult]:
-    scored: list[tuple[float, float, int, PreparedReference, CorrelationResult]] = []
+    full_scan_matches: list[tuple[float, float, int, PreparedReference, CorrelationResult]] = []
+    assisted_matches: list[tuple[float, float, int, PreparedReference, CorrelationResult]] = []
     for reference in references:
-        result = correlate_feature_envelopes_full_scan(
+        full_result = correlate_feature_envelopes_full_scan(
             reference.features.normalized_envelope,
             target_features.normalized_envelope,
             feature_rate=reference.features.feature_rate,
         )
-        scored.append(
+        full_scan_matches.append(
             (
-                result.z_score,
-                result.prominence_ratio,
+                full_result.z_score,
+                full_result.prominence_ratio,
                 -reference.original_index,
                 reference,
-                result,
+                full_result,
             )
         )
 
-    _z_score, _prominence, _index, reference, result = max(scored, key=lambda item: item[:3])
+        if master_reference is None or estimated_master_offset_seconds is None:
+            continue
+        reference_delta = reference_offset_from_master(reference, master_reference)
+        estimated_correlation_offset = reference_delta - estimated_master_offset_seconds
+        try:
+            assisted_result = correlate_feature_envelopes(
+                reference.features.normalized_envelope,
+                target_features.normalized_envelope,
+                feature_rate=reference.features.feature_rate,
+                estimated_offset=estimated_correlation_offset,
+                window_seconds=IGNORE_METADATA_ASSIST_WINDOW_SECONDS,
+                source="metadata_assisted_full_scan",
+            )
+        except ValueError:
+            continue
+        assisted_matches.append(
+            (
+                assisted_result.z_score,
+                assisted_result.prominence_ratio,
+                -reference.original_index,
+                reference,
+                assisted_result,
+            )
+        )
+
+    _z_score, _prominence, _index, reference, result = max(
+        full_scan_matches,
+        key=lambda item: item[:3],
+    )
+
+    if assisted_matches and estimated_master_offset_seconds is not None:
+        assisted_reference, assisted_result = best_metadata_assisted_match(
+            assisted_matches,
+            result,
+            estimated_master_offset_seconds,
+            master_reference,
+        )
+        if assisted_result is not None:
+            return assisted_reference, assisted_result
+
     return reference, result
 
+
+def best_metadata_assisted_match(
+    assisted_matches: list[tuple[float, float, int, PreparedReference, CorrelationResult]],
+    full_scan_result: CorrelationResult,
+    estimated_master_offset_seconds: float,
+    master_reference: PreparedReference | None,
+) -> tuple[PreparedReference, CorrelationResult | None]:
+    _z_score, _prominence, _index, reference, result = max(
+        assisted_matches,
+        key=lambda item: item[:3],
+    )
+    if result.z_score < MIN_FULL_SCAN_Z_SCORE:
+        return reference, None
+    if result.prominence_ratio < MIN_CONFIDENCE_PROMINENCE:
+        return reference, None
+    if master_reference is None:
+        return reference, result
+
+    full_scan_premiere_offset = correlation_offset_to_premiere_offset(
+        full_scan_result.offset_seconds
+    )
+    full_deviation = abs(full_scan_premiere_offset - estimated_master_offset_seconds)
+    if full_deviation >= IGNORE_METADATA_ASSIST_MAX_FULL_SCAN_DEVIATION_SECONDS:
+        return reference, result
+    if result.z_score >= full_scan_result.z_score * 0.9:
+        return reference, result
+    return reference, None
 
 def select_master_reference_track(
     references: list[PreparedReference],
@@ -1600,7 +1707,7 @@ def sync_multiple_tracks_hybrid(
     master_reference, master_reference_parts = select_master_reference_track(references)
     primary_reference = master_reference
     reference_mtime_average = average_reference_mtime(reference_files)
-    reference_start = None if ignore_metadata else primary_reference.absolute_start_time
+    reference_start = primary_reference.absolute_start_time
 
     results = {
         "reference": str(primary_reference.path),
@@ -1632,6 +1739,9 @@ def sync_multiple_tracks_hybrid(
             ),
             "camera_post_cut_native_min_previous_duration_seconds": (
                 CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS
+            ),
+            "camera_post_cut_native_max_gap_seconds": (
+                CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS
             ),
             "camera_peer_refine_window_seconds": CAMERA_PEER_REFINE_WINDOW_SECONDS,
             "camera_peer_refine_max_delta_seconds": CAMERA_PEER_REFINE_MAX_DELTA_SECONDS,
@@ -1707,30 +1817,41 @@ def sync_multiple_tracks_hybrid(
                 chosen_reference, chosen_result = find_best_reference_match(
                     references,
                     target_features,
+                    master_reference=master_reference,
+                    estimated_master_offset_seconds=clip.estimated_offset_seconds,
                 )
                 window_result = None
                 if chosen_result.z_score < MIN_FULL_SCAN_Z_SCORE:
-                    logger.warning(
-                        "Casamento fraco para %s: z-score %.2f < %.2f. Clip ignorado.",
-                        clip.path.name,
-                        chosen_result.z_score,
-                        MIN_FULL_SCAN_Z_SCORE,
-                    )
-                    register_skipped_clip(
-                        results,
-                        clip,
-                        reason="weak_full_scan_match",
-                        extra_metadata={
-                            "metadata_ignored": True,
-                            "chosen_reference_path": str(chosen_reference.path),
-                            "chosen_reference_name": chosen_reference.name,
-                            "correlation_source": chosen_result.source,
-                            "correlation_z_score": chosen_result.z_score,
-                            "correlation_prominence_ratio": chosen_result.prominence_ratio,
-                            "min_full_scan_z_score": MIN_FULL_SCAN_Z_SCORE,
-                        },
-                    )
-                    continue
+                    if explicit_selection and use_camera_clock_model:
+                        logger.warning(
+                            "Casamento fraco para %s: z-score %.2f < %.2f. "
+                            "Mantendo clip selecionado para posicionamento pelo modelo da camera.",
+                            clip.path.name,
+                            chosen_result.z_score,
+                            MIN_FULL_SCAN_Z_SCORE,
+                        )
+                    else:
+                        logger.warning(
+                            "Casamento fraco para %s: z-score %.2f < %.2f. Clip ignorado.",
+                            clip.path.name,
+                            chosen_result.z_score,
+                            MIN_FULL_SCAN_Z_SCORE,
+                        )
+                        register_skipped_clip(
+                            results,
+                            clip,
+                            reason="weak_full_scan_match",
+                            extra_metadata={
+                                "metadata_ignored": True,
+                                "chosen_reference_path": str(chosen_reference.path),
+                                "chosen_reference_name": chosen_reference.name,
+                                "correlation_source": chosen_result.source,
+                                "correlation_z_score": chosen_result.z_score,
+                                "correlation_prominence_ratio": chosen_result.prominence_ratio,
+                                "min_full_scan_z_score": MIN_FULL_SCAN_Z_SCORE,
+                            },
+                        )
+                        continue
             else:
                 chosen_reference = primary_reference
                 logger.info(
@@ -1804,6 +1925,9 @@ def sync_multiple_tracks_hybrid(
             ),
             "camera_post_cut_native_min_previous_duration_seconds": (
                 CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS
+            ),
+            "camera_post_cut_native_max_gap_seconds": (
+                CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS
             ),
             "camera_peer_refine_window_seconds": CAMERA_PEER_REFINE_WINDOW_SECONDS,
             "camera_peer_refine_max_delta_seconds": CAMERA_PEER_REFINE_MAX_DELTA_SECONDS,
@@ -2140,6 +2264,28 @@ def build_camera_block_placements(
                         f"offset_refino={old_final_offset:.6f}s; "
                         f"offset_nativo={predicted_offset:.6f}s"
                     )
+                elif (
+                    method == "camera_clock_model"
+                    and is_usable_post_cut_local_refinement(
+                        local_refinement,
+                        native_predicted_offset_seconds=predicted_offset,
+                        clock_model_offset_seconds=clock_model_offset,
+                    )
+                ):
+                    final_offset = local_refinement.final_offset_seconds
+                    method = "camera_clock_post_cut_local_refine"
+                    decision_reason = (
+                        f"{decision_reason}; {native_post_cut_reason}; "
+                        f"post_cut_refino_local_intermediario="
+                        f"{local_refinement.reference.name}; "
+                        f"delta_refino="
+                        f"{local_refinement.delta_from_prediction_seconds:.6f}s; "
+                        f"z_refino={local_refinement.result.z_score:.2f}; "
+                        f"prom_refino="
+                        f"{local_refinement.result.prominence_ratio:.3f}; "
+                        f"offset_nativo={predicted_offset:.6f}s; "
+                        f"offset_modelo={clock_model_offset:.6f}s"
+                    )
             elif use_camera_clock_model and individual_is_camera_base_outlier:
                 local_refinement = refine_camera_offset_near_prediction(
                     references,
@@ -2184,6 +2330,20 @@ def build_camera_block_placements(
                     if match.clip.key == anchor_match.clip.key
                     else "camera_block_individual_dsp"
                 )
+            elif is_usable_weak_individual_near_prediction(
+                match,
+                individual_offset + camera_adjustment,
+                predicted_offset,
+                previous_final_end,
+            ):
+                final_offset = individual_offset + camera_adjustment
+                method = "camera_block_weak_individual_near_prediction"
+                decision_reason = (
+                    f"weak_individual_near_prediction:"
+                    f"delta={final_offset - predicted_offset:.6f}s;"
+                    f"z={match.chosen_result.z_score:.2f};"
+                    f"prom={match.chosen_result.prominence_ratio:.3f}"
+                )
             else:
                 final_offset = predicted_offset
                 method = (
@@ -2195,6 +2355,7 @@ def build_camera_block_placements(
             if method in {
                 "camera_clock_model",
                 "camera_clock_local_refine",
+                "camera_clock_post_cut_local_refine",
                 "camera_clock_native_post_cut",
                 "camera_base_local_refine",
                 "camera_base_native_outlier_fallback",
@@ -2278,7 +2439,7 @@ def build_camera_block_placements(
             previous_duration_seconds = match.clip.duration_seconds
 
     if use_camera_clock_model:
-        placements = apply_peer_camera_refinements(placements)
+        placements = apply_peer_camera_refinements(placements, references, master_reference)
 
     return sorted(
         placements,
@@ -2328,6 +2489,28 @@ def should_use_individual_camera_offset(
 
     return True, "individual_dsp_confiavel"
 
+
+def is_usable_weak_individual_near_prediction(
+    match: ClipSyncMatch,
+    individual_offset_seconds: float,
+    predicted_offset_seconds: float,
+    previous_final_end_seconds: float | None,
+) -> bool:
+    if match.clip.duration_seconds < MIN_INDIVIDUAL_DSP_DURATION_SECONDS:
+        return False
+    if match.chosen_result.z_score < CAMERA_WEAK_INDIVIDUAL_MIN_Z_SCORE:
+        return False
+    if match.chosen_result.prominence_ratio < CAMERA_WEAK_INDIVIDUAL_MIN_PROMINENCE:
+        return False
+    if abs(individual_offset_seconds - predicted_offset_seconds) > CAMERA_WEAK_INDIVIDUAL_MAX_DELTA_SECONDS:
+        return False
+    if (
+        previous_final_end_seconds is not None
+        and individual_offset_seconds
+        < previous_final_end_seconds - CAMERA_ORDER_OVERLAP_TOLERANCE_SECONDS
+    ):
+        return False
+    return True
 
 def camera_specific_offset_seconds(
     camera_name: str,
@@ -2419,19 +2602,28 @@ def choose_camera_anchor_candidate(
         master_reference,
     )
     anchor_pool = [candidate for candidate in candidates if candidate.eligible_as_anchor]
+    using_metadata_base = False
     if not anchor_pool:
-        anchor_pool = candidates
+        metadata_base = metadata_camera_base_seconds(candidates)
+        if metadata_base is not None:
+            anchor_pool = candidates
+            consensus_candidates = candidates
+            camera_base_seconds = metadata_base
+            using_metadata_base = True
+        else:
+            anchor_pool = candidates
 
-    consensus_candidates = choose_camera_base_consensus(anchor_pool)
-    if not consensus_candidates:
-        consensus_candidates = anchor_pool
+    if not using_metadata_base:
+        consensus_candidates = choose_camera_base_consensus(anchor_pool)
+        if not consensus_candidates:
+            consensus_candidates = anchor_pool
 
-    camera_base_seconds = weighted_median(
-        [
-            (candidate.base_offset_seconds, candidate.weight)
-            for candidate in consensus_candidates
-        ]
-    )
+        camera_base_seconds = weighted_median(
+            [
+                (candidate.base_offset_seconds, candidate.weight)
+                for candidate in consensus_candidates
+            ]
+        )
     anchor_candidate = max(
         consensus_candidates,
         key=lambda candidate: (
@@ -2458,6 +2650,41 @@ def choose_camera_anchor_candidate(
     return anchor_candidate, camera_base_seconds, consensus_candidates, candidates
 
 
+
+def metadata_reference_overlap_seconds(
+    match: ClipSyncMatch,
+    master_reference: PreparedReference,
+) -> float | None:
+    estimated_offset = match.clip.estimated_offset_seconds
+    if estimated_offset is None:
+        return None
+    return timeline_overlap_seconds(
+        estimated_offset,
+        match.clip.duration_seconds,
+        0.0,
+        master_reference.duration_seconds,
+    )
+
+
+def metadata_camera_base_seconds(
+    candidates: list[CameraAnchorCandidate],
+) -> float | None:
+    values: list[tuple[float, float]] = []
+    for candidate in candidates:
+        estimated_offset = candidate.match.clip.estimated_offset_seconds
+        if estimated_offset is None:
+            continue
+        duration_weight = max(1.0, min(candidate.match.clip.duration_seconds, 600.0) / 60.0)
+        values.append(
+            (
+                estimated_offset - candidate.native_relative_start_seconds,
+                duration_weight,
+            )
+        )
+    if not values:
+        return None
+    return weighted_median(values)
+
 def build_camera_anchor_candidates(
     camera_matches: list[ClipSyncMatch],
     native_timing: dict[str, dict[str, float | None]],
@@ -2473,9 +2700,22 @@ def build_camera_anchor_candidates(
             match.chosen_result.prominence_ratio,
             1.0,
         )
+        metadata_overlap = metadata_reference_overlap_seconds(match, master_reference)
+        dsp_overlap = timeline_overlap_seconds(
+            individual_offset,
+            match.clip.duration_seconds,
+            0.0,
+            master_reference.duration_seconds,
+        )
+        has_plausible_reference_overlap = (
+            metadata_overlap is None
+            or metadata_overlap >= METADATA_ANCHOR_MIN_REFERENCE_OVERLAP_SECONDS
+            or dsp_overlap >= METADATA_ANCHOR_MIN_REFERENCE_OVERLAP_SECONDS
+        )
         eligible_as_anchor = (
             match.clip.duration_seconds >= MIN_CAMERA_ANCHOR_DURATION_SECONDS
             and match.chosen_result.z_score >= MIN_FULL_SCAN_Z_SCORE
+            and has_plausible_reference_overlap
         )
         candidates.append(
             CameraAnchorCandidate(
@@ -2788,12 +3028,50 @@ def is_usable_camera_local_refinement(
 ) -> bool:
     if refinement is None:
         return False
-    if refinement.result.z_score < CAMERA_LOCAL_REFINE_MIN_Z_SCORE:
+
+    delta_seconds = abs(refinement.delta_from_prediction_seconds)
+    if delta_seconds > CAMERA_LOCAL_REFINE_MAX_DELTA_SECONDS:
         return False
+
+    if refinement.result.z_score >= CAMERA_LOCAL_REFINE_MIN_Z_SCORE:
+        return True
+
+    if (
+        delta_seconds <= CAMERA_LOCAL_REFINE_MEDIUM_MAX_DELTA_SECONDS
+        and refinement.result.z_score >= CAMERA_LOCAL_REFINE_MEDIUM_MIN_Z_SCORE
+        and refinement.result.prominence_ratio
+        >= CAMERA_LOCAL_REFINE_MEDIUM_MIN_PROMINENCE
+    ):
+        return True
+
     return (
-        abs(refinement.delta_from_prediction_seconds)
-        <= CAMERA_LOCAL_REFINE_MAX_DELTA_SECONDS
+        delta_seconds <= CAMERA_LOCAL_REFINE_WEAK_MAX_DELTA_SECONDS
+        and refinement.result.z_score >= CAMERA_LOCAL_REFINE_WEAK_MIN_Z_SCORE
+        and refinement.result.prominence_ratio
+        >= CAMERA_LOCAL_REFINE_WEAK_MIN_PROMINENCE
     )
+
+
+def is_usable_post_cut_local_refinement(
+    refinement: LocalCameraRefinement | None,
+    *,
+    native_predicted_offset_seconds: float,
+    clock_model_offset_seconds: float,
+) -> bool:
+    if refinement is None:
+        return False
+
+    delta_seconds = abs(refinement.delta_from_prediction_seconds)
+    if delta_seconds > CAMERA_LOCAL_REFINE_MAX_DELTA_SECONDS:
+        return False
+    if refinement.result.z_score < CAMERA_LOCAL_REFINE_MEDIUM_MIN_Z_SCORE:
+        return False
+    if refinement.result.prominence_ratio < CAMERA_POST_CUT_LOCAL_MIN_PROMINENCE:
+        return False
+
+    lower = min(native_predicted_offset_seconds, clock_model_offset_seconds)
+    upper = max(native_predicted_offset_seconds, clock_model_offset_seconds)
+    return lower <= refinement.final_offset_seconds <= upper
 
 
 def should_use_native_post_cut_prediction(
@@ -2816,6 +3094,13 @@ def should_use_native_post_cut_prediction(
         )
     if native_gap_from_previous_seconds is None:
         return False, "gap_nativo_indisponivel"
+    if native_gap_from_previous_seconds > CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS:
+        return (
+            False,
+            "gap_nativo_grande_demais="
+            f"{native_gap_from_previous_seconds:.6f}s>"
+            f"{CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS:.3f}s",
+        )
 
     if (
         local_refinement is not None
@@ -2855,6 +3140,8 @@ def should_use_native_post_cut_prediction(
 
 def apply_peer_camera_refinements(
     placements: list[CameraBlockPlacement],
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
 ) -> list[CameraBlockPlacement]:
     updated = list(placements)
     for allow_peer_refined in (False, True):
@@ -2904,9 +3191,722 @@ def apply_peer_camera_refinements(
                     f"overlap={refinement.overlap_seconds:.3f}s"
                 ),
             )
+    updated = apply_peer_camera_previous_gap_backfill(updated)
+    updated = apply_peer_camera_bridge_rescue(
+        updated,
+        references=references,
+        master_reference=master_reference,
+    )
+    return apply_peer_camera_block_bridge_rescue(
+        updated,
+        references=references,
+        master_reference=master_reference,
+    )
 
+
+def apply_peer_camera_previous_gap_backfill(
+    placements: list[CameraBlockPlacement],
+) -> list[CameraBlockPlacement]:
+    updated = list(placements)
+    camera_names = sorted({placement.match.clip.camera_name for placement in updated})
+    for camera_name in camera_names:
+        camera_indices = sorted(
+            [
+                index
+                for index, placement in enumerate(updated)
+                if placement.match.clip.camera_name == camera_name
+            ],
+            key=lambda index: (
+                updated[index].native_relative_start_seconds,
+                updated[index].match.clip.path.name.casefold(),
+            ),
+        )
+        for position in range(1, len(camera_indices)):
+            previous_index = camera_indices[position - 1]
+            current_index = camera_indices[position]
+            previous = updated[previous_index]
+            current = updated[current_index]
+            refinement = current.peer_refinement
+            if refinement is None:
+                continue
+            if not is_eligible_peer_gap_backfill_target(previous):
+                continue
+            native_gap = current.native_gap_from_previous_seconds
+            if native_gap is None:
+                continue
+
+            inherited_delta = refinement.delta_from_current_seconds
+            if abs(inherited_delta) > CAMERA_PEER_REFINE_MAX_DELTA_SECONDS:
+                continue
+
+            current_gap = current.final_offset_seconds - (
+                previous.final_offset_seconds + previous.match.clip.duration_seconds
+            )
+            gap_error = current_gap - native_gap
+            if (
+                abs(gap_error - inherited_delta)
+                > CAMERA_PEER_GAP_BACKFILL_TOLERANCE_SECONDS
+            ):
+                continue
+
+            proposed_offset = previous.final_offset_seconds + inherited_delta
+            if not preserves_camera_order_with_offset(previous, proposed_offset, updated):
+                continue
+
+            trim = find_peer_gap_direct_trim(
+                previous,
+                current,
+                updated,
+                proposed_offset_seconds=proposed_offset,
+            )
+            trim_reason = ""
+            if trim is not None:
+                proposed_offset = trim.final_offset_seconds
+                trim_reason = (
+                    f"; direct_trim_ref={trim.reference_clip_name};"
+                    f"direct_delta={trim.delta_from_current_seconds:.6f}s;"
+                    f"direct_z={trim.result.z_score:.2f};"
+                    f"direct_prom={trim.result.prominence_ratio:.3f}"
+                )
+
+            logger.info(
+                "Backfill peer-gap: %s herdou ajuste de %s | %.6fs -> %.6fs | "
+                "delta %.6fs | gap_atual %.6fs | gap_nativo %.6fs%s",
+                previous.match.clip.path.name,
+                current.match.clip.path.name,
+                previous.final_offset_seconds,
+                proposed_offset,
+                proposed_offset - previous.final_offset_seconds,
+                current_gap,
+                native_gap,
+                trim_reason,
+            )
+            updated[previous_index] = replace(
+                previous,
+                final_offset_seconds=proposed_offset,
+                method=(
+                    "camera_peer_gap_direct_trim"
+                    if trim is not None
+                    else "camera_peer_gap_backfill"
+                ),
+                offset_decision_reason=(
+                    f"{previous.offset_decision_reason}; peer_gap_backfill:"
+                    f"neighbor={current.match.clip.path.name};"
+                    f"delta={inherited_delta:.6f}s;"
+                    f"gap_atual={current_gap:.6f}s;"
+                    f"gap_nativo={native_gap:.6f}s;"
+                    f"z_peer={refinement.result.z_score:.2f};"
+                    f"prom_peer={refinement.result.prominence_ratio:.3f}"
+                    f"{trim_reason}"
+                ),
+            )
     return updated
 
+
+def find_peer_gap_direct_trim(
+    placement: CameraBlockPlacement,
+    neighbor: CameraBlockPlacement,
+    placements: list[CameraBlockPlacement],
+    *,
+    proposed_offset_seconds: float,
+) -> PeerCameraRefinement | None:
+    neighbor_refinement = neighbor.peer_refinement
+    if neighbor_refinement is None:
+        return None
+
+    peer_reference = next(
+        (
+            item
+            for item in placements
+            if item.match.clip.camera_name == neighbor_refinement.reference_camera_name
+            and item.match.clip.path.name == neighbor_refinement.reference_clip_name
+        ),
+        None,
+    )
+    if peer_reference is None:
+        return None
+
+    estimated_offset = peer_reference.final_offset_seconds - proposed_offset_seconds
+    try:
+        result = correlate_feature_envelopes(
+            peer_reference.match.target_features.normalized_envelope,
+            placement.match.target_features.normalized_envelope,
+            feature_rate=peer_reference.match.target_features.feature_rate,
+            estimated_offset=estimated_offset,
+            window_seconds=CAMERA_PEER_GAP_DIRECT_TRIM_WINDOW_SECONDS,
+            source="peer_gap_direct_trim",
+        )
+    except (AttributeError, ValueError) as exc:
+        logger.debug(
+            "Trim peer-gap ignorado para %s x %s: %s",
+            placement.match.clip.path.name,
+            peer_reference.match.clip.path.name,
+            exc,
+        )
+        return None
+
+    final_offset = peer_reference.final_offset_seconds - result.offset_seconds
+    delta_from_proposed = final_offset - proposed_offset_seconds
+    if abs(delta_from_proposed) > CAMERA_PEER_GAP_DIRECT_TRIM_MAX_DELTA_SECONDS:
+        return None
+    if result.z_score < CAMERA_PEER_GAP_DIRECT_TRIM_MIN_Z_SCORE:
+        return None
+    if result.prominence_ratio < CAMERA_PEER_GAP_DIRECT_TRIM_MIN_PROMINENCE:
+        return None
+    if not preserves_camera_order_with_offset(placement, final_offset, placements):
+        return None
+
+    overlap_seconds = timeline_overlap_seconds(
+        final_offset,
+        placement.match.clip.duration_seconds,
+        peer_reference.final_offset_seconds,
+        peer_reference.match.clip.duration_seconds,
+    )
+    return PeerCameraRefinement(
+        reference_clip_name=peer_reference.match.clip.path.name,
+        reference_camera_name=peer_reference.match.clip.camera_name,
+        result=replace(result, source="peer_gap_direct_trim"),
+        final_offset_seconds=final_offset,
+        delta_from_current_seconds=delta_from_proposed,
+        overlap_seconds=overlap_seconds,
+    )
+
+
+def is_eligible_peer_gap_backfill_target(placement: CameraBlockPlacement) -> bool:
+    if placement.peer_refinement is not None:
+        return False
+    if placement.local_refinement is not None and is_usable_camera_local_refinement(
+        placement.local_refinement
+    ):
+        return False
+    return placement.method in {
+        "camera_clock_native_post_cut",
+        "camera_base_native_outlier_fallback",
+        "camera_block_native_fallback",
+        "camera_block_anchor_native_fallback",
+    }
+
+
+def apply_peer_camera_bridge_rescue(
+    placements: list[CameraBlockPlacement],
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> list[CameraBlockPlacement]:
+    updated = list(placements)
+    for placement_index in sorted(
+        range(len(updated)),
+        key=lambda index: updated[index].final_offset_seconds,
+    ):
+        placement = updated[placement_index]
+        if not should_try_peer_camera_bridge(placement, references, master_reference):
+            continue
+
+        refinement = find_best_peer_camera_bridge(
+            placement,
+            updated,
+        )
+        if refinement is None:
+            continue
+        if not preserves_camera_order_with_offset(
+            placement,
+            refinement.final_offset_seconds,
+            updated,
+        ):
+            continue
+
+        logger.info(
+            "Ponte camera-camera: %s usando %s | %.6fs -> %.6fs | "
+            "delta %.6fs | z=%.2f | overlap %.3fs",
+            placement.match.clip.path.name,
+            refinement.reference_clip_name,
+            placement.final_offset_seconds,
+            refinement.final_offset_seconds,
+            refinement.delta_from_current_seconds,
+            refinement.result.z_score,
+            refinement.overlap_seconds,
+        )
+        updated[placement_index] = replace(
+            placement,
+            final_offset_seconds=refinement.final_offset_seconds,
+            peer_refinement=refinement,
+            method="camera_clock_peer_bridge",
+            offset_decision_reason=(
+                f"{placement.offset_decision_reason}; "
+                "peer_camera_bridge:"
+                f"ref={refinement.reference_clip_name};"
+                f"camera={refinement.reference_camera_name};"
+                f"delta={refinement.delta_from_current_seconds:.6f}s;"
+                f"z={refinement.result.z_score:.2f};"
+                f"prom={refinement.result.prominence_ratio:.3f};"
+                f"overlap={refinement.overlap_seconds:.3f}s"
+            ),
+        )
+    return updated
+
+
+def should_try_peer_camera_bridge(
+    placement: CameraBlockPlacement,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> bool:
+    if placement.method not in {
+        "camera_clock_native_post_cut",
+        "camera_base_native_outlier_fallback",
+    }:
+        return False
+    if placement.match.clip.duration_seconds < CAMERA_PEER_BRIDGE_MIN_OVERLAP_SECONDS:
+        return False
+    coverage_seconds = reference_overlap_for_offset(
+        placement.final_offset_seconds,
+        placement.match.clip.duration_seconds,
+        references,
+        master_reference,
+    )
+    if coverage_seconds >= CAMERA_PEER_BRIDGE_MIN_OVERLAP_SECONDS:
+        return False
+    return True
+
+
+def find_best_peer_camera_bridge(
+    placement: CameraBlockPlacement,
+    placements: list[CameraBlockPlacement],
+) -> PeerCameraRefinement | None:
+    candidates: list[PeerCameraRefinement] = []
+    for peer in placements:
+        if peer is placement:
+            continue
+        if peer.match.clip.camera_name == placement.match.clip.camera_name:
+            continue
+        if not is_eligible_peer_bridge_reference(peer):
+            continue
+
+        try:
+            result = correlate_feature_envelopes_full_scan(
+                peer.match.target_features.normalized_envelope,
+                placement.match.target_features.normalized_envelope,
+                feature_rate=peer.match.target_features.feature_rate,
+            )
+        except (AttributeError, ValueError) as exc:
+            logger.debug(
+                "Ponte camera-camera ignorada para %s x %s: %s",
+                placement.match.clip.path.name,
+                peer.match.clip.path.name,
+                exc,
+            )
+            continue
+
+        final_offset = peer.final_offset_seconds - result.offset_seconds
+        overlap_seconds = timeline_overlap_seconds(
+            final_offset,
+            placement.match.clip.duration_seconds,
+            peer.final_offset_seconds,
+            peer.match.clip.duration_seconds,
+        )
+        refinement = PeerCameraRefinement(
+            reference_clip_name=peer.match.clip.path.name,
+            reference_camera_name=peer.match.clip.camera_name,
+            result=replace(result, source="peer_camera_full_scan_bridge"),
+            final_offset_seconds=final_offset,
+            delta_from_current_seconds=final_offset - placement.final_offset_seconds,
+            overlap_seconds=overlap_seconds,
+        )
+        if is_usable_peer_camera_bridge(refinement):
+            candidates.append(refinement)
+
+    if not candidates:
+        return None
+    return max(candidates, key=peer_camera_bridge_score)
+
+
+def is_eligible_peer_bridge_reference(placement: CameraBlockPlacement) -> bool:
+    return is_eligible_peer_reference(placement, allow_peer_refined=True)
+
+
+def is_usable_peer_camera_bridge(refinement: PeerCameraRefinement) -> bool:
+    if refinement.result.z_score < CAMERA_PEER_BRIDGE_MIN_Z_SCORE:
+        return False
+    if refinement.result.prominence_ratio < CAMERA_PEER_BRIDGE_MIN_PROMINENCE:
+        return False
+    return refinement.overlap_seconds >= CAMERA_PEER_BRIDGE_MIN_OVERLAP_SECONDS
+
+
+def peer_camera_bridge_score(refinement: PeerCameraRefinement) -> tuple[float, float, float]:
+    return (
+        refinement.result.z_score,
+        refinement.result.prominence_ratio,
+        refinement.overlap_seconds,
+    )
+
+
+def reference_overlap_for_offset(
+    offset_seconds: float,
+    duration_seconds: float,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> float:
+    start_seconds = offset_seconds
+    end_seconds = offset_seconds + duration_seconds
+    best_overlap = 0.0
+    for reference in references:
+        reference_start = reference_offset_from_master(reference, master_reference)
+        reference_end = reference_start + reference.duration_seconds
+        best_overlap = max(
+            best_overlap,
+            min(end_seconds, reference_end) - max(start_seconds, reference_start),
+        )
+    return max(0.0, best_overlap)
+
+
+def preserves_camera_order_with_offset(
+    placement: CameraBlockPlacement,
+    proposed_offset_seconds: float,
+    placements: list[CameraBlockPlacement],
+) -> bool:
+    proposed_end = proposed_offset_seconds + placement.match.clip.duration_seconds
+    same_camera = sorted(
+        [
+            item
+            for item in placements
+            if item.match.clip.camera_name == placement.match.clip.camera_name
+        ],
+        key=lambda item: (
+            item.native_relative_start_seconds,
+            item.match.clip.path.name.casefold(),
+        ),
+    )
+    index = same_camera.index(placement)
+    if index > 0:
+        previous = same_camera[index - 1]
+        previous_end = previous.final_offset_seconds + previous.match.clip.duration_seconds
+        if proposed_offset_seconds < previous_end - CAMERA_ORDER_OVERLAP_TOLERANCE_SECONDS:
+            return False
+    if index + 1 < len(same_camera):
+        next_item = same_camera[index + 1]
+        if proposed_end > next_item.final_offset_seconds + CAMERA_ORDER_OVERLAP_TOLERANCE_SECONDS:
+            return False
+    return True
+
+
+def apply_peer_camera_block_bridge_rescue(
+    placements: list[CameraBlockPlacement],
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> list[CameraBlockPlacement]:
+    updated = list(placements)
+    for camera_name in sorted({placement.match.clip.camera_name for placement in updated}):
+        camera_placements = [
+            placement for placement in updated if placement.match.clip.camera_name == camera_name
+        ]
+        if len(camera_placements) < 2:
+            continue
+
+        bridge = find_best_peer_camera_block_bridge(
+            camera_placements,
+            updated,
+            references=references,
+            master_reference=master_reference,
+        )
+        if bridge is None:
+            continue
+        if not should_apply_peer_camera_block_bridge(camera_placements, bridge):
+            continue
+
+        current_base = camera_block_current_base_seconds(camera_placements)
+        metadata_base = metadata_camera_base_from_placements(camera_placements)
+        logger.warning(
+            "Ponte bloco camera-camera: %s usando %s/%s | base %.6fs -> %.6fs | "
+            "delta %.6fs | z=%.2f | overlap %.3fs | metadata_base=%s",
+            camera_name,
+            bridge.peer.match.clip.camera_name,
+            bridge.peer.match.clip.path.name,
+            current_base,
+            bridge.base_offset_seconds,
+            bridge.base_offset_seconds - current_base,
+            bridge.result.z_score,
+            bridge.overlap_seconds,
+            "n/d" if metadata_base is None else f"{metadata_base:.6f}s",
+        )
+        updated = apply_camera_block_bridge_base(
+            updated,
+            camera_name,
+            bridge,
+            references=references,
+            master_reference=master_reference,
+        )
+    return updated
+
+
+def find_best_peer_camera_block_bridge(
+    camera_placements: list[CameraBlockPlacement],
+    placements: list[CameraBlockPlacement],
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> CameraBlockBridgeCandidate | None:
+    candidates: list[CameraBlockBridgeCandidate] = []
+    camera_name = camera_placements[0].match.clip.camera_name
+    for placement in camera_placements:
+        if placement.match.clip.duration_seconds < CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS:
+            continue
+        for peer in placements:
+            if peer.match.clip.camera_name == camera_name:
+                continue
+            if not is_eligible_peer_block_bridge_reference(
+                peer,
+                references=references,
+                master_reference=master_reference,
+            ):
+                continue
+            try:
+                result = correlate_feature_envelopes_full_scan(
+                    peer.match.target_features.normalized_envelope,
+                    placement.match.target_features.normalized_envelope,
+                    feature_rate=peer.match.target_features.feature_rate,
+                )
+            except (AttributeError, ValueError) as exc:
+                logger.debug(
+                    "Ponte bloco ignorada para %s x %s: %s",
+                    placement.match.clip.path.name,
+                    peer.match.clip.path.name,
+                    exc,
+                )
+                continue
+
+            final_offset = peer.final_offset_seconds - result.offset_seconds
+            overlap_seconds = timeline_overlap_seconds(
+                final_offset,
+                placement.match.clip.duration_seconds,
+                peer.final_offset_seconds,
+                peer.match.clip.duration_seconds,
+            )
+            candidate = CameraBlockBridgeCandidate(
+                placement=placement,
+                peer=peer,
+                result=replace(result, source="peer_camera_block_bridge"),
+                final_offset_seconds=final_offset,
+                base_offset_seconds=final_offset - placement.native_relative_start_seconds,
+                overlap_seconds=overlap_seconds,
+            )
+            if is_usable_peer_camera_block_bridge(candidate):
+                candidates.append(candidate)
+
+    if not candidates:
+        return None
+
+    clusters: list[list[CameraBlockBridgeCandidate]] = []
+    for seed in candidates:
+        clusters.append(
+            [
+                candidate
+                for candidate in candidates
+                if abs(candidate.base_offset_seconds - seed.base_offset_seconds)
+                <= CAMERA_PEER_BLOCK_BRIDGE_BASE_TOLERANCE_SECONDS
+            ]
+        )
+    best_cluster = max(
+        clusters,
+        key=lambda cluster: (
+            len(cluster),
+            sum(camera_block_bridge_candidate_weight(candidate) for candidate in cluster),
+            sum(candidate.overlap_seconds for candidate in cluster),
+        ),
+    )
+    best_candidate = max(best_cluster, key=camera_block_bridge_candidate_score)
+    if len(best_cluster) == 1 and not is_strong_single_peer_block_bridge(best_candidate):
+        return None
+
+    base = weighted_median(
+        [
+            (candidate.base_offset_seconds, camera_block_bridge_candidate_weight(candidate))
+            for candidate in best_cluster
+        ]
+    )
+    return replace(best_candidate, base_offset_seconds=base)
+
+
+def is_eligible_peer_block_bridge_reference(
+    placement: CameraBlockPlacement,
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> bool:
+    if not is_eligible_peer_reference(placement, allow_peer_refined=True):
+        return False
+    coverage_seconds = reference_overlap_for_offset(
+        placement.final_offset_seconds,
+        placement.match.clip.duration_seconds,
+        references,
+        master_reference,
+    )
+    if coverage_seconds >= CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS:
+        return True
+    return placement.method in {"camera_clock_peer_refine", "camera_clock_peer_bridge"}
+
+
+def is_usable_peer_camera_block_bridge(candidate: CameraBlockBridgeCandidate) -> bool:
+    if candidate.result.z_score < CAMERA_PEER_BLOCK_BRIDGE_MIN_Z_SCORE:
+        return False
+    if candidate.result.prominence_ratio < CAMERA_PEER_BLOCK_BRIDGE_MIN_PROMINENCE:
+        return False
+    return candidate.overlap_seconds >= CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS
+
+
+def is_strong_single_peer_block_bridge(candidate: CameraBlockBridgeCandidate) -> bool:
+    return (
+        candidate.result.z_score >= CAMERA_PEER_BLOCK_BRIDGE_MIN_Z_SCORE + 4.0
+        and candidate.overlap_seconds >= CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS * 3.0
+    )
+
+
+def camera_block_bridge_candidate_weight(candidate: CameraBlockBridgeCandidate) -> float:
+    overlap_factor = max(1.0, min(candidate.overlap_seconds, 600.0) / 30.0)
+    return candidate.result.z_score * max(candidate.result.prominence_ratio, 1.0) * overlap_factor
+
+
+def camera_block_bridge_candidate_score(
+    candidate: CameraBlockBridgeCandidate,
+) -> tuple[float, float, float]:
+    return (
+        camera_block_bridge_candidate_weight(candidate),
+        candidate.result.z_score,
+        candidate.overlap_seconds,
+    )
+
+
+def should_apply_peer_camera_block_bridge(
+    camera_placements: list[CameraBlockPlacement],
+    bridge: CameraBlockBridgeCandidate,
+) -> bool:
+    current_base = camera_block_current_base_seconds(camera_placements)
+    if abs(bridge.base_offset_seconds - current_base) < CAMERA_PEER_REFINE_MAX_DELTA_SECONDS:
+        return False
+
+    metadata_base = metadata_camera_base_from_placements(camera_placements)
+    if metadata_base is not None:
+        current_error = abs(current_base - metadata_base)
+        bridge_error = abs(bridge.base_offset_seconds - metadata_base)
+        return (
+            bridge_error + CAMERA_PEER_BLOCK_BRIDGE_MIN_METADATA_IMPROVEMENT_SECONDS
+            < current_error
+        )
+
+    return camera_block_has_large_internal_conflict(camera_placements)
+
+
+def camera_block_current_base_seconds(camera_placements: list[CameraBlockPlacement]) -> float:
+    values = [placement.camera_block_base_seconds for placement in camera_placements]
+    return median_value(values) or camera_placements[0].camera_block_base_seconds
+
+
+def metadata_camera_base_from_placements(
+    camera_placements: list[CameraBlockPlacement],
+) -> float | None:
+    values: list[tuple[float, float]] = []
+    for placement in camera_placements:
+        estimated_offset = placement.match.clip.estimated_offset_seconds
+        if estimated_offset is None:
+            continue
+        duration_weight = max(1.0, min(placement.match.clip.duration_seconds, 600.0) / 60.0)
+        values.append(
+            (
+                estimated_offset - placement.native_relative_start_seconds,
+                duration_weight,
+            )
+        )
+    if not values:
+        return None
+    return weighted_median(values)
+
+
+def camera_block_has_large_internal_conflict(
+    camera_placements: list[CameraBlockPlacement],
+) -> bool:
+    deviations = [abs(placement.camera_base_deviation_seconds) for placement in camera_placements]
+    if not deviations:
+        return False
+    return max(deviations) > max(60.0, CAMERA_BASE_CONSENSUS_TOLERANCE_SECONDS * 5.0)
+
+
+def apply_camera_block_bridge_base(
+    placements: list[CameraBlockPlacement],
+    camera_name: str,
+    bridge: CameraBlockBridgeCandidate,
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+) -> list[CameraBlockPlacement]:
+    updated: list[CameraBlockPlacement] = []
+    for placement in placements:
+        if placement.match.clip.camera_name != camera_name:
+            updated.append(placement)
+            continue
+
+        predicted_offset = bridge.base_offset_seconds + placement.native_relative_start_seconds
+        local_refinement = refine_camera_offset_near_prediction(
+            references,
+            placement.match.target_features,
+            master_reference,
+            predicted_final_offset_seconds=predicted_offset,
+        )
+        if is_usable_camera_local_refinement(local_refinement):
+            final_offset = local_refinement.final_offset_seconds
+            method = "camera_block_peer_bridge_local_refine"
+            local_reason = (
+                f"; refino_local={local_refinement.reference.name};"
+                f"delta_refino={local_refinement.delta_from_prediction_seconds:.6f}s;"
+                f"z_refino={local_refinement.result.z_score:.2f}"
+            )
+        else:
+            final_offset = predicted_offset
+            method = "camera_block_peer_bridge"
+            local_reason = "; sem_refino_local_util"
+
+        peer_refinement = PeerCameraRefinement(
+            reference_clip_name=bridge.peer.match.clip.path.name,
+            reference_camera_name=bridge.peer.match.clip.camera_name,
+            result=bridge.result,
+            final_offset_seconds=final_offset,
+            delta_from_current_seconds=final_offset - placement.final_offset_seconds,
+            overlap_seconds=bridge.overlap_seconds,
+        )
+        updated.append(
+            replace(
+                placement,
+                final_offset_seconds=final_offset,
+                anchor_match=bridge.placement.match,
+                camera_block_base_seconds=bridge.base_offset_seconds,
+                camera_base_deviation_seconds=(
+                    placement.camera_base_candidate_seconds - bridge.base_offset_seconds
+                ),
+                camera_native_predicted_offset_seconds=predicted_offset,
+                camera_clock_model_offset_seconds=predicted_offset,
+                camera_clock_residual_seconds=(
+                    placement.individual_dsp_offset_seconds - predicted_offset
+                ),
+                camera_clock_base_seconds=bridge.base_offset_seconds,
+                camera_clock_drift_rate=1.0,
+                camera_clock_drift_ppm=0.0,
+                camera_clock_inlier_count=1,
+                camera_clock_candidate_count=placement.camera_clock_candidate_count,
+                camera_clock_model_method="peer_camera_block_bridge",
+                local_refinement=local_refinement,
+                peer_refinement=peer_refinement,
+                method=method,
+                offset_decision_reason=(
+                    f"{placement.offset_decision_reason}; peer_camera_block_bridge:"
+                    f"ref={bridge.peer.match.clip.path.name};"
+                    f"camera={bridge.peer.match.clip.camera_name};"
+                    f"base={bridge.base_offset_seconds:.6f}s;"
+                    f"z={bridge.result.z_score:.2f};"
+                    f"prom={bridge.result.prominence_ratio:.3f};"
+                    f"overlap={bridge.overlap_seconds:.3f}s"
+                    f"{local_reason}"
+                ),
+            )
+        )
+    return updated
 
 def find_best_peer_camera_refinement(
     placement: CameraBlockPlacement,
@@ -2977,6 +3977,7 @@ def is_eligible_peer_reference(
 ) -> bool:
     stable_methods = {
         "camera_clock_local_refine",
+        "camera_clock_post_cut_local_refine",
         "camera_clock_model",
         "camera_block_individual_dsp",
         "camera_block_anchor_individual_dsp",
@@ -2985,6 +3986,12 @@ def is_eligible_peer_reference(
     }
     if allow_peer_refined:
         stable_methods.add("camera_clock_peer_refine")
+        stable_methods.add("camera_clock_peer_bridge")
+        stable_methods.add("camera_block_peer_bridge")
+        stable_methods.add("camera_block_peer_bridge_local_refine")
+        stable_methods.add("camera_block_weak_individual_near_prediction")
+        stable_methods.add("camera_peer_gap_backfill")
+        stable_methods.add("camera_peer_gap_direct_trim")
     if placement.method not in stable_methods:
         return False
     return placement.match.clip.duration_seconds >= CAMERA_PEER_REFINE_MIN_OVERLAP_SECONDS
@@ -3047,12 +4054,12 @@ def prepare_target_clips(
         )
         target_wav = cached_audio.wav_path
         features = cached_audio.features
-        if ignore_metadata:
+        if reference_start is None:
+            if not ignore_metadata:
+                raise ValueError("reference_start e obrigatorio quando metadados estao ativos.")
             estimated_start = None
             estimated_offset = None
         else:
-            if reference_start is None:
-                raise ValueError("reference_start e obrigatorio quando metadados estao ativos.")
             estimated_start = target_file.stat().st_mtime - features.duration_seconds
             estimated_offset = estimated_start - reference_start
         key = str(target_file)
@@ -3300,6 +4307,7 @@ def apply_camera_spanning_continuity(
                     item_metadata.get("window_peak_z_score"),
                     item_metadata.get("camera_block_anchor_z_score"),
                 ),
+                "prevent_spanning": camera_spanning_has_trusted_refinement(item_metadata),
             }
         )
 
@@ -3328,6 +4336,28 @@ def apply_camera_spanning_continuity(
         )
     return adjustments
 
+
+def camera_spanning_has_trusted_refinement(item_metadata: dict) -> bool:
+    method = str(item_metadata.get("sync_method") or "")
+    if item_metadata.get("camera_peer_refine_reference_clip"):
+        return True
+    if method in {
+        "camera_clock_peer_refine",
+        "camera_clock_post_cut_local_refine",
+        "camera_block_peer_bridge",
+        "camera_block_peer_bridge_local_refine",
+        "camera_peer_gap_backfill",
+        "camera_peer_gap_direct_trim",
+    }:
+        return True
+    local_z = spanning_first_number(item_metadata.get("camera_local_refine_z_score"))
+    local_delta = spanning_first_number(item_metadata.get("camera_local_refine_delta_seconds"))
+    if local_z is None or local_delta is None:
+        return False
+    return (
+        abs(local_delta) <= CAMERA_LOCAL_REFINE_MEDIUM_MAX_DELTA_SECONDS
+        and local_z >= CAMERA_LOCAL_REFINE_MEDIUM_MIN_Z_SCORE
+    )
 
 def apply_reference_spanning_continuity(
     sync_results: dict,
@@ -3468,15 +4498,19 @@ def stitch_spanning_items(
             expected_offset = previous_offset + previous_duration
             gap_seconds = current_offset - expected_offset
             current_z_score = spanning_first_number(z_score_getter(item))
-            can_stitch, skip_reason = should_apply_file_spanning(
-                previous_duration_seconds=previous_duration,
-                gap_seconds=gap_seconds,
-                current_z_score=current_z_score,
-                tolerance_seconds=tolerance_seconds,
-                min_previous_duration_seconds=min_previous_duration_seconds,
-                require_low_current_z_score=require_low_current_z_score,
-                low_z_score_threshold=low_z_score_threshold,
-            )
+            if bool(item.get("prevent_spanning")):
+                can_stitch = False
+                skip_reason = "current_has_trusted_refinement"
+            else:
+                can_stitch, skip_reason = should_apply_file_spanning(
+                    previous_duration_seconds=previous_duration,
+                    gap_seconds=gap_seconds,
+                    current_z_score=current_z_score,
+                    tolerance_seconds=tolerance_seconds,
+                    min_previous_duration_seconds=min_previous_duration_seconds,
+                    require_low_current_z_score=require_low_current_z_score,
+                    low_z_score_threshold=low_z_score_threshold,
+                )
             if can_stitch:
                 old_offset = current_offset
                 current_offset = expected_offset

@@ -288,8 +288,7 @@ class WaveSyncSimpleApp(tk.Tk):
         title.grid(row=0, column=0, columnspan=3, sticky="w")
         subtitle = ttk.Label(
             header,
-            text="Escolha os arquivos que voce quer sincronizar. O XML e o selection JSON sao gerados automaticamente.",
-        )
+            text="Escolha os arquivos que voce quer sincronizar.")
         subtitle.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 12))
 
         ttk.Label(header, text="Nome do projeto").grid(row=2, column=0, sticky="w")
