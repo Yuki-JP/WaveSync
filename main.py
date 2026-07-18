@@ -1683,6 +1683,44 @@ def register_skipped_clip(
     results["metadata"][clip.key] = metadata
 
 
+def register_unprepared_target(
+    results: dict,
+    target_file: Path,
+    *,
+    camera_map: dict[str, str],
+    original_index: int,
+    reason: str,
+    error: str,
+    ignore_metadata: bool,
+) -> None:
+    key = str(target_file)
+    camera_name = camera_map.get(key) or target_file.parent.name or "CAM 01"
+    try:
+        target_mtime = target_file.stat().st_mtime
+    except OSError:
+        target_mtime = None
+
+    results["offsets"][key] = None
+    results["metadata"][key] = {
+        "duration_seconds": None,
+        "repaired_duration_seconds": None,
+        "duration_source": "unavailable",
+        "extracted_wav_path": None,
+        "cache_hit_wav": False,
+        "cache_hit_features": False,
+        "estimated_start_time": None,
+        "estimated_offset_seconds": None,
+        "camera_name": camera_name,
+        "sync_skipped": True,
+        "skip_reason": reason,
+        "error": error,
+        "target_prepare_failed": True,
+        "target_original_index": original_index,
+        "target_mtime": target_mtime,
+        "metadata_ignored": ignore_metadata,
+    }
+
+
 def sync_multiple_tracks_hybrid(
     reference_files: list[Path],
     target_files: list[Path],
@@ -1770,6 +1808,7 @@ def sync_multiple_tracks_hybrid(
         reference_start=reference_start,
         camera_map=camera_map,
         ignore_metadata=ignore_metadata,
+        results=results,
     )
 
     matches: list[ClipSyncMatch] = []
@@ -4043,15 +4082,34 @@ def prepare_target_clips(
     reference_start: float | None,
     camera_map: dict[str, str],
     ignore_metadata: bool = False,
+    results: dict | None = None,
 ) -> list[PreparedClip]:
     clips: list[PreparedClip] = []
     for index, target_file in enumerate(target_files, start=1):
         logger.info("Preparando alvo %d/%d: %s", index, len(target_files), target_file.name)
-        cached_audio = prepare_cached_audio_features(
-            target_file,
-            AUDIO_CACHE_DIR,
-            label=f"target_{index - 1}_{target_file.stem}",
-        )
+        try:
+            cached_audio = prepare_cached_audio_features(
+                target_file,
+                AUDIO_CACHE_DIR,
+                label=f"target_{index - 1}_{target_file.stem}",
+            )
+        except Exception as exc:
+            logger.error(
+                "Falha ao preparar alvo %s. Clip sera marcado como falha e o lote continua: %s",
+                target_file,
+                exc,
+            )
+            if results is not None:
+                register_unprepared_target(
+                    results,
+                    target_file,
+                    camera_map=camera_map,
+                    original_index=index,
+                    reason="target_audio_prepare_failed",
+                    error=str(exc),
+                    ignore_metadata=ignore_metadata,
+                )
+            continue
         target_wav = cached_audio.wav_path
         features = cached_audio.features
         if reference_start is None:
