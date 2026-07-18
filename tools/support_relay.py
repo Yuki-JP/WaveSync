@@ -68,6 +68,19 @@ def safe_filename(value: str | None) -> str:
     return name
 
 
+def unique_package_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = path.with_name(f"{path.stem}_{timestamp}{path.suffix}")
+    counter = 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}_{timestamp}_{counter}{path.suffix}")
+        counter += 1
+    return candidate
+
+
 class RelayServer(ThreadingHTTPServer):
     support_config: SupportConfig
     max_bytes: int
@@ -102,9 +115,8 @@ class RelayHandler(BaseHTTPRequestHandler):
             return
 
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = safe_filename(self.headers.get("X-WaveSync-Filename"))
-        package_path = INBOX_DIR / f"{timestamp}_{filename}"
+        package_path = unique_package_path(INBOX_DIR / filename)
 
         data = self.rfile.read(length)
         package_path.write_bytes(data)

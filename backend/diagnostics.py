@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import urllib.error
 import urllib.request
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -213,12 +215,14 @@ def create_diagnostic_package(
         else root / DIAGNOSTIC_DIR
     )
     destination.mkdir(parents=True, exist_ok=True)
-    package_path = destination / f"wavesync_diagnostico_{timestamp}.zip"
+    latest_output = find_latest_sync_output(root)
+    package_name = diagnostic_package_filename(latest_output, timestamp)
+    package_path = destination / package_name
 
     included: list[str] = []
     skipped: list[str] = []
     total_input_bytes = 0
-    candidates = list(iter_last_sync_diagnostic_candidates(root))
+    candidates = list(iter_last_sync_diagnostic_candidates(root, latest_output=latest_output))
 
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_path in candidates:
@@ -254,6 +258,8 @@ def create_diagnostic_package(
                     "generated_at": datetime.now().isoformat(timespec="seconds"),
                     "project_root": str(root),
                     "machine_name": get_machine_name(),
+                    "diagnostic_zip_name": package_path.name,
+                    "latest_sync_name": sync_base_stem(latest_output) if latest_output else "",
                     "mode": "last_sync_only",
                     "included_files": included,
                     "skipped_files": skipped,
@@ -273,9 +279,14 @@ def create_diagnostic_package(
     )
 
 
-def iter_last_sync_diagnostic_candidates(project_root: Path):
+def iter_last_sync_diagnostic_candidates(
+    project_root: Path,
+    *,
+    latest_output: Path | None = None,
+):
     """Return only the latest sync output set plus the matching config and logs."""
-    latest_output = find_latest_sync_output(project_root)
+    if latest_output is None:
+        latest_output = find_latest_sync_output(project_root)
     yielded: set[Path] = set()
 
     if latest_output is not None:
@@ -336,6 +347,23 @@ def sync_base_stem(path: Path) -> str:
         if name.casefold().endswith(suffix):
             return name[: -len(suffix)]
     return path.stem
+
+
+def diagnostic_package_filename(latest_output: Path | None, timestamp: str) -> str:
+    sync_name = sync_base_stem(latest_output) if latest_output is not None else "wavesync_diagnostico"
+    sync_part = safe_filename_part(sync_name, default="sync", max_length=90)
+    machine_part = safe_filename_part(get_machine_name(), default="maquina", max_length=50)
+    return f"{sync_part}_{machine_part}_{timestamp}.zip"
+
+
+def safe_filename_part(value: str, *, default: str, max_length: int) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_value = normalized.encode("ascii", errors="ignore").decode("ascii")
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", ascii_value).strip("._-")
+    cleaned = re.sub(r"_+", "_", cleaned)
+    if not cleaned:
+        cleaned = default
+    return cleaned[:max_length].strip("._-") or default
 
 
 def config_path_from_audit(latest_output: Path) -> Path | None:
