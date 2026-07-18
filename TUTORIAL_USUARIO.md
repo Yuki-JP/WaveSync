@@ -211,3 +211,32 @@ videos do casamento.
 O usuario nao precisa configurar Telegram, bot, chat id ou JSON. Isso ja vem
 apontado pelo `support_relay.json` do WaveSync. Se aparecer falha de rede, avise
 o suporte para conferir se a maquina de suporte esta ligada e com o relay aberto.
+
+## 12. Maquina De Suporte
+
+Esta parte e apenas para a maquina que vai receber os diagnosticos e encaminhar
+para o Telegram.
+
+1. Crie o arquivo privado `support_config.json` usando o modelo
+   `support_config.example.json`.
+2. Preencha `telegram_bot_token` e `telegram_chat_id`.
+3. Rode uma vez:
+
+```text
+Instalar_Suporte_WaveSync_Inicializacao.bat
+```
+
+Depois disso, o relay inicia oculto junto com o Windows. Nao precisa deixar uma
+janela de CMD aberta.
+
+O log fica em:
+
+```text
+temp\support_relay.log
+```
+
+Para remover a inicializacao automatica, rode:
+
+```text
+Remover_Suporte_WaveSync_Inicializacao.bat
+```

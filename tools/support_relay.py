@@ -30,6 +30,21 @@ from backend.diagnostics import (  # noqa: E402
 
 
 INBOX_DIR = PROJECT_ROOT / "temp" / "support_relay_inbox"
+LOG_PATH = PROJECT_ROOT / "temp" / "support_relay.log"
+
+
+def log_line(message: str) -> None:
+    line = f"[{datetime.now().isoformat(timespec='seconds')}] {message}"
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+    try:
+        print(line)
+    except Exception:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,7 +130,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         )
 
     def log_message(self, format_text: str, *args: object) -> None:
-        print(f"[{datetime.now().isoformat(timespec='seconds')}] {self.address_string()} - {format_text % args}")
+        log_line(f"{self.address_string()} - {format_text % args}")
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -128,27 +143,31 @@ class RelayHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     args = parse_args()
-    support_config = load_support_config(PROJECT_ROOT)
-    if support_config.relay_url:
-        raise SystemExit(
-            "Esta maquina esta configurada como cliente relay. "
-            "Para rodar o servidor, crie support_config.json privado com telegram_bot_token e telegram_chat_id."
-        )
-
-    server = RelayServer((args.host, args.port), RelayHandler)
-    server.support_config = support_config
-    server.max_bytes = args.max_bytes
-
-    print("WaveSync support relay")
-    print(f"Escutando em: http://{args.host}:{args.port}/upload")
-    print("Pressione Ctrl+C para parar.")
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nEncerrando relay...")
-    finally:
-        server.server_close()
-    return 0
+        support_config = load_support_config(PROJECT_ROOT)
+        if support_config.relay_url:
+            raise RuntimeError(
+                "Esta maquina esta configurada como cliente relay. "
+                "Para rodar o servidor, crie support_config.json privado com telegram_bot_token e telegram_chat_id."
+            )
+
+        server = RelayServer((args.host, args.port), RelayHandler)
+        server.support_config = support_config
+        server.max_bytes = args.max_bytes
+
+        log_line("WaveSync support relay")
+        log_line(f"Escutando em: http://{args.host}:{args.port}/upload")
+        log_line("Pressione Ctrl+C para parar.")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            log_line("Encerrando relay...")
+        finally:
+            server.server_close()
+        return 0
+    except Exception as exc:  # noqa: BLE001 - startup failures must be visible in hidden mode.
+        log_line(f"[ERRO] Relay encerrado: {exc}")
+        raise
 
 
 if __name__ == "__main__":
