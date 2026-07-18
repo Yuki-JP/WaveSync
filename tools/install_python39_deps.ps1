@@ -13,6 +13,9 @@ $VenvDir = Join-Path $ProjectRoot ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $VenvPythonw = Join-Path $VenvDir "Scripts\pythonw.exe"
 $AppScript = Join-Path $ProjectRoot "tkinter_app.py"
+$SupportRelayConfig = Join-Path $ProjectRoot "support_relay.json"
+$SupportConfigExample = Join-Path $ProjectRoot "support_config.example.json"
+$SupportConfigAppData = if ($env:APPDATA) { Join-Path (Join-Path $env:APPDATA "WaveSync") "support_config.json" } else { $null }
 
 function Write-Step {
     param([string]$Message)
@@ -193,6 +196,26 @@ function Verify-Dependencies {
     }
 }
 
+function Install-SupportConfig {
+    Write-Step "Verificando envio de diagnostico"
+
+    if (Test-Path $SupportRelayConfig) {
+        Write-Host "[OK] Suporte automatico por relay configurado: $SupportRelayConfig"
+        return
+    }
+
+    if ($SupportConfigAppData -and (Test-Path $SupportConfigAppData)) {
+        Write-Host "[OK] Configuracao privada de suporte encontrada em: $SupportConfigAppData"
+        return
+    }
+
+    Write-Host "[WARN] Suporte automatico nao configurado nesta copia."
+    Write-Host "[WARN] O botao de diagnostico vai gerar ZIP local, mas nao enviara automaticamente."
+    if (Test-Path $SupportConfigExample) {
+        Write-Host "[INFO] Exemplo de config privada: $SupportConfigExample"
+    }
+}
+
 function Open-App {
     if ($NoOpenApp) {
         return
@@ -221,6 +244,7 @@ try {
     Ensure-Venv -PythonPath $pythonPath
     Install-Dependencies
     Verify-Dependencies
+    Install-SupportConfig
 
     Write-Step "Instalacao concluida"
     Write-Host "[OK] Python 3.9 e dependencias estao prontos."

@@ -666,18 +666,6 @@ class WaveSyncSimpleApp(tk.Tk):
             if not consent:
                 self.status.set("Diagnostico cancelado.")
                 return
-        else:
-            consent = messagebox.askyesno(
-                "Enviar diagnostico para suporte",
-                "O WaveSync vai enviar um pacote .zip do ultimo sync, contendo "
-                "config, XML, CSV, JSON e resumo do sistema.\n\n"
-                "Nao serao enviados audios, videos ou arquivos de midia bruta.\n\n"
-                "O pacote pode conter nomes de arquivos e caminhos locais.\n\n"
-                "Deseja enviar agora?",
-            )
-            if not consent:
-                self.status.set("Envio de diagnostico cancelado.")
-                return
 
         self.diagnostic_running = True
         self.set_buttons_enabled(False)

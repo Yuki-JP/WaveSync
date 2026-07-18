@@ -33,8 +33,10 @@ main.py                               Motor principal de sincronizacao
 backend/audio_processor.py            Extracao e features DSP
 backend/xml_generator.py              Geracao do XML para Premiere
 backend/audit_report.py               Relatorios CSV/JSON
-backend/diagnostics.py                Pacote de diagnostico e envio opcional para suporte
-support_config.example.json           Exemplo de config privada para envio de diagnostico
+backend/diagnostics.py                Pacote de diagnostico e envio para suporte
+support_relay.json                    Endereco publico do relay de suporte local
+support_config.example.json           Exemplo de config privada da maquina de suporte
+tools/support_relay.py                Relay local que envia diagnosticos ao Telegram
 tools/install_python39_deps.ps1       Instalador chamado pelo .bat
 tools/make_config.py                  Gerador de config usado pela interface
 ```
@@ -79,24 +81,22 @@ locais da maquina do usuario e nao precisam ir para o Git.
 
 ## Diagnostico Para Suporte
 
-A interface tem o botao `Enviar diagnostico para suporte`. Ele cria um `.zip`
-com os arquivos do ultimo sync: config, XML, CSV, JSON e `resumo_do_sistema.txt`.
+A interface tem o botao `Enviar diagnostico para suporte`. Ao clicar, ele cria
+um `.zip` do ultimo sync e envia automaticamente ao suporte configurado.
 
-O pacote nao inclui audios, videos ou midias brutas. Ele pode conter nomes de
-arquivos e caminhos locais.
+O pacote inclui config, XML, CSV, JSON e `resumo_do_sistema.txt`. Ele nao inclui
+audios, videos ou midias brutas. Ele pode conter nomes de arquivos e caminhos
+locais.
 
-Para ativar o envio automatico via Telegram Bot API, crie um arquivo privado
-`support_config.json` a partir de `support_config.example.json` e preencha
-`telegram_bot_token` e `telegram_chat_id`.
+Para usuarios do escritorio, o envio automatico usa `support_relay.json`, que
+aponta para a maquina de suporte na rede local. Esse arquivo nao contem token.
 
-O WaveSync procura esse arquivo nestes locais:
+Na maquina de suporte, crie o arquivo privado `support_config.json` a partir de
+`support_config.example.json`, preencha `telegram_bot_token` e `telegram_chat_id`
+e deixe o relay rodando:
 
-1. Na pasta do WaveSync, ao lado de `tkinter_app.py`.
-2. Em `%APPDATA%\WaveSync\support_config.json`.
-3. Em `%LOCALAPPDATA%\WaveSync\support_config.json`.
-4. No caminho apontado pela variavel de ambiente `WAVESYNC_SUPPORT_CONFIG`.
+```powershell
+python tools\support_relay.py
+```
 
 Mantenha `support_config.json` fora do Git. Ele ja esta no `.gitignore`.
-
-Sem `support_config.json`, o botao nao envia pela internet, mas ainda gera um
-`.zip` local do ultimo sync para envio manual ao suporte.

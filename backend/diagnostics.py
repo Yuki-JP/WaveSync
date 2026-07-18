@@ -17,7 +17,9 @@ from pathlib import Path
 
 DIAGNOSTIC_DIR = Path("temp") / "diagnostics"
 SUPPORT_CONFIG_FILENAME = "support_config.json"
+SUPPORT_RELAY_CONFIG_FILENAME = "support_relay.json"
 SUPPORT_CONFIG_ENV_VAR = "WAVESYNC_SUPPORT_CONFIG"
+SUPPORT_RELAY_ENV_VAR = "WAVESYNC_SUPPORT_RELAY_URL"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_PACKAGE_BYTES = 45 * 1024 * 1024
@@ -28,10 +30,11 @@ LAST_SYNC_SUFFIXES = (".xml", "_audit.csv", "_audit.json")
 
 @dataclass(frozen=True)
 class SupportConfig:
-    telegram_bot_token: str
-    telegram_chat_id: str
     api_base_url: str = TELEGRAM_API_BASE_URL
     caption_prefix: str = "WaveSync diagnostico"
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    relay_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -67,9 +70,28 @@ def support_config_candidate_paths(project_root: str | Path) -> list[Path]:
     if local_appdata:
         candidates.append(Path(local_appdata) / "WaveSync" / SUPPORT_CONFIG_FILENAME)
 
+    return unique_paths(candidates)
+
+
+def support_relay_config_candidate_paths(project_root: str | Path) -> list[Path]:
+    root = Path(project_root).resolve()
+    candidates = [root / SUPPORT_RELAY_CONFIG_FILENAME]
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "WaveSync" / SUPPORT_RELAY_CONFIG_FILENAME)
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "WaveSync" / SUPPORT_RELAY_CONFIG_FILENAME)
+
+    return unique_paths(candidates)
+
+
+def unique_paths(paths: list[Path]) -> list[Path]:
     unique: list[Path] = []
     seen: set[str] = set()
-    for path in candidates:
+    for path in paths:
         normalized = str(path).casefold()
         if normalized not in seen:
             seen.add(normalized)
@@ -77,29 +99,79 @@ def support_config_candidate_paths(project_root: str | Path) -> list[Path]:
     return unique
 
 
-def find_support_config_path(project_root: str | Path) -> Path | None:
-    for path in support_config_candidate_paths(project_root):
+def find_existing_path(paths: list[Path]) -> Path | None:
+    for path in paths:
         if path.exists() and path.is_file():
             return path
     return None
 
 
-def load_support_config(project_root: str | Path) -> SupportConfig:
-    config_path = find_support_config_path(project_root)
-    if config_path is None:
-        searched = "\n".join(
-            f"- {path}" for path in support_config_candidate_paths(project_root)
-        )
-        raise FileNotFoundError(
-            "Arquivo de suporte nao encontrado. Locais procurados:\n"
-            f"{searched}\n\n"
-            "Crie esse arquivo a partir de support_config.example.json."
-        )
+def find_support_config_path(project_root: str | Path) -> Path | None:
+    return find_existing_path(support_config_candidate_paths(project_root))
 
-    with config_path.open("r", encoding="utf-8") as handle:
+
+def find_support_relay_config_path(project_root: str | Path) -> Path | None:
+    return find_existing_path(support_relay_config_candidate_paths(project_root))
+
+
+def load_json_object(path: Path) -> dict:
+    with path.open("r", encoding="utf-8-sig") as handle:
         raw_config = json.load(handle)
     if not isinstance(raw_config, dict):
-        raise ValueError("support_config.json deve conter um objeto JSON.")
+        raise ValueError(f"{path.name} deve conter um objeto JSON.")
+    return raw_config
+
+
+def load_support_config(project_root: str | Path) -> SupportConfig:
+    config_path = find_support_config_path(project_root)
+    if config_path is not None:
+        return support_config_from_json(load_json_object(config_path), source_name=config_path.name)
+
+    relay_url = str(os.environ.get(SUPPORT_RELAY_ENV_VAR) or "").strip()
+    relay_config_path = find_support_relay_config_path(project_root)
+    raw_relay_config: dict = {}
+    if relay_config_path is not None:
+        raw_relay_config = load_json_object(relay_config_path)
+        relay_url = str(
+            raw_relay_config.get("support_relay_url")
+            or raw_relay_config.get("relay_url")
+            or raw_relay_config.get("upload_url")
+            or relay_url
+        ).strip()
+
+    if relay_url:
+        caption_prefix = str(
+            raw_relay_config.get("caption_prefix") or "WaveSync diagnostico"
+        ).strip()
+        return SupportConfig(relay_url=relay_url, caption_prefix=caption_prefix)
+
+    searched = "\n".join(
+        [
+            "Configuracao privada Telegram:",
+            *(f"- {path}" for path in support_config_candidate_paths(project_root)),
+            "",
+            "Configuracao publica do relay:",
+            *(f"- {path}" for path in support_relay_config_candidate_paths(project_root)),
+            "",
+            f"Variavel de ambiente: {SUPPORT_RELAY_ENV_VAR}",
+        ]
+    )
+    raise FileNotFoundError(
+        "Suporte automatico nao configurado. Locais procurados:\n"
+        f"{searched}"
+    )
+
+
+def support_config_from_json(raw_config: dict, *, source_name: str) -> SupportConfig:
+    relay_url = str(
+        raw_config.get("support_relay_url")
+        or raw_config.get("relay_url")
+        or raw_config.get("upload_url")
+        or ""
+    ).strip()
+    caption_prefix = str(raw_config.get("caption_prefix") or "WaveSync diagnostico").strip()
+    if relay_url:
+        return SupportConfig(relay_url=relay_url, caption_prefix=caption_prefix)
 
     token = str(
         raw_config.get("telegram_bot_token")
@@ -112,12 +184,11 @@ def load_support_config(project_root: str | Path) -> SupportConfig:
         or ""
     ).strip()
     api_base_url = str(raw_config.get("api_base_url") or TELEGRAM_API_BASE_URL).strip()
-    caption_prefix = str(raw_config.get("caption_prefix") or "WaveSync diagnostico").strip()
 
     if not token:
-        raise ValueError("support_config.json sem telegram_bot_token.")
+        raise ValueError(f"{source_name} sem telegram_bot_token.")
     if not chat_id:
-        raise ValueError("support_config.json sem telegram_chat_id.")
+        raise ValueError(f"{source_name} sem telegram_chat_id.")
 
     return SupportConfig(
         telegram_bot_token=token,
@@ -372,7 +443,12 @@ def send_diagnostic_package(
     package_path: str | Path,
     support_config: SupportConfig,
 ) -> TelegramUploadResult:
-    path = Path(package_path)
+    if support_config.relay_url:
+        return send_diagnostic_package_to_relay(package_path, support_config)
+    return send_diagnostic_package_to_telegram(package_path, support_config)
+
+
+def validate_package_for_upload(path: Path) -> None:
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Pacote de diagnostico nao encontrado: {path}")
     if path.stat().st_size > TELEGRAM_MAX_DOCUMENT_BYTES:
@@ -380,6 +456,18 @@ def send_diagnostic_package(
             "Pacote maior que o limite do Telegram Bot API. "
             f"Tamanho: {path.stat().st_size / (1024.0**2):.2f} MiB"
         )
+
+
+def send_diagnostic_package_to_telegram(
+    package_path: str | Path,
+    support_config: SupportConfig,
+) -> TelegramUploadResult:
+    path = Path(package_path)
+    validate_package_for_upload(path)
+    if not support_config.telegram_bot_token:
+        raise ValueError("Configuracao de suporte sem telegram_bot_token.")
+    if not support_config.telegram_chat_id:
+        raise ValueError("Configuracao de suporte sem telegram_chat_id.")
 
     caption = f"{support_config.caption_prefix}: {path.name}"
     fields = {
@@ -421,6 +509,47 @@ def send_diagnostic_package(
         ok=True,
         message_id=int(message_id) if message_id is not None else None,
         description=payload.get("description"),
+    )
+
+
+def send_diagnostic_package_to_relay(
+    package_path: str | Path,
+    support_config: SupportConfig,
+) -> TelegramUploadResult:
+    path = Path(package_path)
+    validate_package_for_upload(path)
+    if not support_config.relay_url:
+        raise ValueError("Configuracao de suporte sem support_relay_url.")
+
+    safe_name = path.name.encode("ascii", errors="ignore").decode("ascii") or "diagnostico.zip"
+    request = urllib.request.Request(
+        support_config.relay_url,
+        data=path.read_bytes(),
+        headers={
+            "Content-Type": "application/zip",
+            "X-WaveSync-Filename": safe_name,
+            "X-WaveSync-Caption-Prefix": support_config.caption_prefix[:200],
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            response_data = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Relay HTTP {exc.code}: {details}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede ao enviar diagnostico ao relay: {exc.reason}") from exc
+
+    payload = json.loads(response_data)
+    if not payload.get("ok"):
+        raise RuntimeError(f"Relay recusou envio: {payload}")
+
+    message_id = payload.get("message_id")
+    return TelegramUploadResult(
+        ok=True,
+        message_id=int(message_id) if message_id is not None else None,
+        description=str(payload.get("description") or "relay_ok"),
     )
 
 

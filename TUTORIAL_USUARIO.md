@@ -204,14 +204,10 @@ python tkinter_app.py
 Se o suporte pedir um diagnostico, clique em `Enviar diagnostico para suporte`
 dentro do WaveSync.
 
-Antes de enviar, o programa mostra uma confirmacao. O pacote enviado inclui os
-arquivos do ultimo sync: config, XML, CSV, JSON e resumo do sistema. Ele nao
-envia audios nem videos do casamento.
+O WaveSync cria e envia automaticamente um pacote do ultimo sync. Esse pacote
+inclui config, XML, CSV, JSON e resumo do sistema. Ele nao envia audios nem
+videos do casamento.
 
-Quando o suporte automatico estiver configurado, o WaveSync envia esse pacote
-pelo Telegram. O arquivo privado `support_config.json` pode ficar na pasta do
-WaveSync ou em `%APPDATA%\WaveSync\support_config.json`.
-
-Se aparecer `Suporte nao configurado`, o WaveSync ainda consegue gerar um `.zip`
-local do ultimo sync. Nesse caso, confirme a geracao e envie esse `.zip`
-manualmente para o suporte.
+O usuario nao precisa configurar Telegram, bot, chat id ou JSON. Isso ja vem
+apontado pelo `support_relay.json` do WaveSync. Se aparecer falha de rede, avise
+o suporte para conferir se a maquina de suporte esta ligada e com o relay aberto.
