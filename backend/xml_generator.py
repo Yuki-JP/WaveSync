@@ -91,11 +91,13 @@ def create_timeline_xml(
 
     root = ET.Element("xmeml", version="4")
     project = ET.SubElement(root, "project")
-    ET.SubElement(project, "name").text = "Timeline Sincronizada"
+    ET.SubElement(project, "name").text = "WaveSync"
     children = ET.SubElement(project, "children")
 
+    _add_project_media_bins(children, camera_groups, references, fps)
+
     sequence = ET.SubElement(children, "sequence", id="sequence-1")
-    ET.SubElement(sequence, "name").text = "Timeline Sincronizada"
+    ET.SubElement(sequence, "name").text = "Synced Sequence"
     _add_rate(sequence, fps)
     ET.SubElement(sequence, "duration").text = str(sequence_duration)
     _add_timecode(sequence, fps)
@@ -447,6 +449,137 @@ def _explicit_absolute_start_time(*metadata_sources: Mapping[str, object]) -> fl
     return None
 
 
+def _add_project_media_bins(
+    project_children: ET.Element,
+    camera_groups: OrderedDict[str, list[dict]],
+    references: list[dict],
+    fps: int,
+) -> None:
+    used_names: set[str] = set()
+    bin_index = 1
+
+    for camera_name, camera_clips in camera_groups.items():
+        bin_name = _unique_project_item_name(camera_name, used_names)
+        _add_media_bin(
+            project_children,
+            bin_name=bin_name,
+            media_items=sorted(camera_clips, key=lambda item: (item["name"], item["path"])),
+            media_kind="video_audio",
+            fps=fps,
+            id_prefix=f"bin-camera-{bin_index}",
+        )
+        bin_index += 1
+
+    for track_name, track_references in _references_grouped_by_track(references).items():
+        bin_name = _unique_project_item_name(track_name, used_names)
+        _add_media_bin(
+            project_children,
+            bin_name=bin_name,
+            media_items=sorted(track_references, key=lambda item: (item["name"], item["path"])),
+            media_kind="audio",
+            fps=fps,
+            id_prefix=f"bin-reference-{bin_index}",
+        )
+        bin_index += 1
+
+
+def _add_media_bin(
+    project_children: ET.Element,
+    *,
+    bin_name: str,
+    media_items: list[dict],
+    media_kind: str,
+    fps: int,
+    id_prefix: str,
+) -> None:
+    media_bin = ET.SubElement(project_children, "bin")
+    ET.SubElement(media_bin, "name").text = bin_name
+    bin_children = ET.SubElement(media_bin, "children")
+
+    for item_index, media_item in enumerate(media_items, start=1):
+        masterclip_id = f"{_xml_id_token(id_prefix)}-master-{item_index}"
+        media_item["masterclip_id"] = masterclip_id
+        _add_master_clip(
+            bin_children,
+            media_item=media_item,
+            fps=fps,
+            media_kind=media_kind,
+            clip_id=masterclip_id,
+            file_id=f"{_xml_id_token(id_prefix)}-file-{item_index}",
+        )
+
+
+def _add_master_clip(
+    parent: ET.Element,
+    *,
+    media_item: dict,
+    fps: int,
+    media_kind: str,
+    clip_id: str,
+    file_id: str,
+) -> None:
+    duration_frames = int(media_item["duration_frames"])
+    source_clip = {
+        **media_item,
+        "name": Path(media_item["path"]).name,
+        "start": 0,
+        "end": duration_frames,
+        "in": 0,
+        "out": duration_frames,
+    }
+
+    clip = ET.SubElement(parent, "clip", id=clip_id)
+    ET.SubElement(clip, "name").text = source_clip["name"]
+    ET.SubElement(clip, "duration").text = str(duration_frames)
+    _add_rate(clip, fps)
+    ET.SubElement(clip, "in").text = "-1"
+    ET.SubElement(clip, "out").text = "-1"
+
+    media = ET.SubElement(clip, "media")
+    if media_kind == "video_audio":
+        video = ET.SubElement(media, "video")
+        video_track = ET.SubElement(video, "track")
+        _add_clipitem(
+            video_track,
+            clip=source_clip,
+            fps=fps,
+            media_type="video",
+            item_id=f"{clip_id}-video",
+            file_id=f"{file_id}-video",
+            source_track_index=1,
+            include_masterclip_id=False,
+        )
+
+    audio = ET.SubElement(media, "audio")
+    audio_track = ET.SubElement(audio, "track")
+    _add_clipitem(
+        audio_track,
+        clip=source_clip,
+        fps=fps,
+        media_type="audio",
+        item_id=f"{clip_id}-audio",
+        file_id=f"{file_id}-audio",
+        source_track_index=1,
+        include_masterclip_id=False,
+    )
+
+
+def _unique_project_item_name(name: str, used_names: set[str]) -> str:
+    base = (name or "Midia").strip() or "Midia"
+    candidate = base
+    suffix = 2
+    while candidate.casefold() in used_names:
+        candidate = f"{base} {suffix}"
+        suffix += 1
+    used_names.add(candidate.casefold())
+    return candidate
+
+
+def _xml_id_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-")
+    return token or "item"
+
+
 def _add_camera_video_tracks(
     video_parent: ET.Element,
     camera_groups: OrderedDict[str, list[dict]],
@@ -491,6 +624,7 @@ def _add_reference_audio_track(
             "in": 0,
             "out": reference["duration_frames"],
             "label": reference.get("label", "Caribbean"),
+            "masterclip_id": reference.get("masterclip_id"),
         },
         fps=fps,
         media_type="audio",
@@ -527,6 +661,7 @@ def _add_reference_audio_tracks(
                     "in": 0,
                     "out": reference["duration_frames"],
                     "label": reference.get("label", "Caribbean"),
+                    "masterclip_id": reference.get("masterclip_id"),
                 },
                 fps=fps,
                 media_type="audio",
@@ -580,9 +715,12 @@ def _add_clipitem(
     item_id: str,
     file_id: str,
     source_track_index: int,
+    include_masterclip_id: bool = True,
 ) -> ET.Element:
     clipitem = ET.SubElement(parent, "clipitem", id=item_id)
     ET.SubElement(clipitem, "name").text = clip["name"]
+    if include_masterclip_id and clip.get("masterclip_id"):
+        ET.SubElement(clipitem, "masterclipid").text = str(clip["masterclip_id"])
     ET.SubElement(clipitem, "duration").text = str(clip["duration_frames"])
     _add_rate(clipitem, fps)
     ET.SubElement(clipitem, "start").text = str(clip["start"])
