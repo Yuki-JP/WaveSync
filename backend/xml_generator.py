@@ -25,6 +25,8 @@ PREMIERE_NTSC_TIMEBASE = 30
 PREMIERE_NTSC_FRAME_RATE = 30000.0 / 1001.0
 CAMERA_AUDIO_START_TRACK = 1
 CAMERA_OVERLAP_FIX_TOLERANCE_FRAMES = 3
+DEFAULT_CAMERA_AUDIO_CHANNELS = 2
+DEFAULT_REFERENCE_AUDIO_CHANNELS = 1
 
 
 def create_timeline_xml(
@@ -186,7 +188,11 @@ def _collect_valid_clips(
                     item_metadata.get("chosen_reference_name"),
                 ),
                 "raw_correlation_offset_seconds": raw_correlation_offset_seconds,
-                "audio_track_count": _audio_track_count(item_metadata, clip_data),
+                "audio_track_count": _audio_track_count(
+                    item_metadata,
+                    clip_data,
+                    default=DEFAULT_CAMERA_AUDIO_CHANNELS,
+                ),
                 "label": "Iris",
                 "in": 0,
                 "out": max(1, _seconds_to_frames(duration_seconds, fps)),
@@ -277,6 +283,11 @@ def _collect_references(sync_results: dict, fps: int) -> list[dict]:
                     item_metadata,
                 ),
                 "label": "Caribbean",
+                "audio_track_count": _audio_track_count(
+                    item_metadata,
+                    raw_reference,
+                    default=DEFAULT_REFERENCE_AUDIO_CHANNELS,
+                ),
                 "in": 0,
                 "out": max(1, _seconds_to_frames(duration_seconds, fps)),
             },
@@ -625,6 +636,7 @@ def _add_reference_audio_track(
             "out": reference["duration_frames"],
             "label": reference.get("label", "Caribbean"),
             "masterclip_id": reference.get("masterclip_id"),
+            "audio_track_count": reference.get("audio_track_count", DEFAULT_REFERENCE_AUDIO_CHANNELS),
         },
         fps=fps,
         media_type="audio",
@@ -662,6 +674,7 @@ def _add_reference_audio_tracks(
                     "out": reference["duration_frames"],
                     "label": reference.get("label", "Caribbean"),
                     "masterclip_id": reference.get("masterclip_id"),
+                    "audio_track_count": reference.get("audio_track_count", DEFAULT_REFERENCE_AUDIO_CHANNELS),
                 },
                 fps=fps,
                 media_type="audio",
@@ -736,7 +749,9 @@ def _add_clipitem(
     ET.SubElement(file_element, "duration").text = str(clip["duration_frames"])
 
     media = ET.SubElement(file_element, "media")
-    ET.SubElement(media, media_type)
+    media_node = ET.SubElement(media, media_type)
+    if media_type == "audio":
+        ET.SubElement(media_node, "channelcount").text = str(_clip_audio_channel_count(clip))
 
     source_track = ET.SubElement(clipitem, "sourcetrack")
     ET.SubElement(source_track, "mediatype").text = media_type
@@ -801,17 +816,40 @@ def _normalize_lookup_path(path_value: str | Path) -> str:
         return str(path_value).replace("\\", "/").casefold()
 
 
-def _audio_track_count(item_metadata: dict, clip_data: dict) -> int:
+def _clip_audio_channel_count(clip: dict, default: int = DEFAULT_REFERENCE_AUDIO_CHANNELS) -> int:
     return max(
         1,
         _first_int(
+            clip.get("source_audio_channel_count"),
+            clip.get("audio_channel_count"),
+            clip.get("audio_track_count"),
+            clip.get("audio_channels"),
+            clip.get("channels"),
+            default,
+        ),
+    )
+
+
+def _audio_track_count(
+    item_metadata: dict,
+    clip_data: dict,
+    *,
+    default: int = DEFAULT_REFERENCE_AUDIO_CHANNELS,
+) -> int:
+    return max(
+        1,
+        _first_int(
+            clip_data.get("source_audio_channel_count"),
+            clip_data.get("audio_channel_count"),
             clip_data.get("audio_track_count"),
             clip_data.get("audio_channels"),
             clip_data.get("channels"),
+            item_metadata.get("source_audio_channel_count"),
+            item_metadata.get("audio_channel_count"),
             item_metadata.get("audio_track_count"),
             item_metadata.get("audio_channels"),
             item_metadata.get("channels"),
-            1,
+            default,
         ),
     )
 
