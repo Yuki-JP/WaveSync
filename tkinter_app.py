@@ -255,6 +255,11 @@ def count_files(groups: dict[str, list[str]]) -> int:
     return sum(len(paths) for paths in groups.values())
 
 
+def latest_summary_value(text: str, label: str) -> str:
+    matches = re.findall(rf"^{re.escape(label)}\s*:\s*(.+?)\s*$", text, flags=re.MULTILINE)
+    return matches[-1].strip() if matches else ""
+
+
 class WaveSyncSimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -271,6 +276,8 @@ class WaveSyncSimpleApp(tk.Tk):
         self.log_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.running_process: subprocess.Popen[str] | None = None
         self.diagnostic_running = False
+        self.collecting_sync_output = False
+        self.current_sync_output: list[str] = []
 
         self._build()
         self.after(100, self.drain_log_queue)
@@ -722,6 +729,8 @@ class WaveSyncSimpleApp(tk.Tk):
         selection = self.save_selection(xml_output=xml_output)
         command = build_sync_command(selection, xml_output)
 
+        self.current_sync_output = []
+        self.collecting_sync_output = True
         self.set_buttons_enabled(False)
         self.append_log("\n" + "=" * 72 + "\nSYNC\n" + "=" * 72 + "\n")
         self.append_log(f"Selection: {selection}\n")
@@ -765,18 +774,23 @@ class WaveSyncSimpleApp(tk.Tk):
             while True:
                 kind, value = self.log_queue.get_nowait()
                 if kind == "line":
-                    self.append_log(str(value))
+                    line = str(value)
+                    if self.collecting_sync_output:
+                        self.current_sync_output.append(line)
+                    self.append_log(line)
                 elif kind == "done":
                     return_code = int(value)
                     self.running_process = None
+                    self.collecting_sync_output = False
                     self.set_buttons_enabled(True)
-                    if return_code == 0:
-                        self.status.set("Sync concluido. Importe o XML no Premiere.")
-                        self.append_log("\n[OK] Sync concluido.\n")
-                        messagebox.showinfo("Sync concluido", f"XML gerado:\n{self.output_xml()}")
-                    else:
-                        self.status.set("Sync falhou. Veja o log abaixo.")
-                        self.append_log(f"\n[FAIL] Sync finalizado com exit={return_code}.\n")
+                    outcome = self.sync_outcome_from_log(return_code)
+                    self.status.set(outcome["status_text"])
+                    self.append_log(outcome["log_line"])
+                    self.show_sync_result_dialog(
+                        title=outcome["title"],
+                        message=outcome["message"],
+                        text_color=outcome["color"],
+                    )
                 elif kind == "diag_done":
                     if isinstance(value, dict):
                         return_code = int(value.get("return_code", 1))
@@ -804,6 +818,88 @@ class WaveSyncSimpleApp(tk.Tk):
         except queue.Empty:
             pass
         self.after(100, self.drain_log_queue)
+
+    def sync_outcome_from_log(self, return_code: int) -> dict[str, str]:
+        log_text = "".join(self.current_sync_output)
+        sync_check = latest_summary_value(log_text, "SyncCheck")
+        sync_guard = latest_summary_value(log_text, "SyncGuard")
+        xml_output = self.output_xml()
+
+        if return_code != 0 or sync_guard.casefold().startswith("bloqueio"):
+            return {
+                "title": "Sync precisa de revisao",
+                "message": (
+                    "O WaveSync nao aprovou esse resultado automaticamente.\n\n"
+                    f"SyncCheck: {sync_check or 'n/a'}\n"
+                    f"SyncGuard: {sync_guard or 'n/a'}\n\n"
+                    "Veja o resumo no log e confira os alertas antes de usar o XML."
+                ),
+                "color": "#c62828",
+                "status_text": "Sync precisa de revisao. Veja o log abaixo.",
+                "log_line": f"\n[FAIL] Sync finalizado com exit={return_code}.\n",
+            }
+
+        if sync_check.casefold().startswith("atencao"):
+            return {
+                "title": "Sync concluido com atencao",
+                "message": (
+                    "O XML foi gerado, mas o WaveSync encontrou algumas inconsistencias.\n\n"
+                    f"SyncCheck: {sync_check}\n"
+                    f"XML: {xml_output}\n\n"
+                    "Importe no Premiere e confira os clipes indicados no log."
+                ),
+                "color": "#b58900",
+                "status_text": "Sync concluido com atencao. Confira o log.",
+                "log_line": "\n[WARN] Sync concluido com atencao.\n",
+            }
+
+        return {
+            "title": "Sync concluido",
+            "message": f"XML gerado:\n{xml_output}",
+            "color": "#111111",
+            "status_text": "Sync concluido. Importe o XML no Premiere.",
+            "log_line": "\n[OK] Sync concluido.\n",
+        }
+
+    def show_sync_result_dialog(self, *, title: str, message: str, text_color: str) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+
+        container = ttk.Frame(dialog, padding=20)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+
+        tk.Label(
+            container,
+            text=title,
+            foreground=text_color,
+            font=("Segoe UI", 12, "bold"),
+            anchor="w",
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            container,
+            text=message,
+            foreground=text_color,
+            font=("Segoe UI", 10),
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        ).grid(row=1, column=0, sticky="ew", pady=(12, 18))
+
+        ok_button = ttk.Button(container, text="OK", command=dialog.destroy)
+        ok_button.grid(row=2, column=0, sticky="e")
+        ok_button.focus_set()
+        dialog.bind("<Return>", lambda _event: dialog.destroy())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - dialog.winfo_height()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.grab_set()
 
     def set_buttons_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"

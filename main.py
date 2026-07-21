@@ -112,6 +112,12 @@ CAMERA_PEER_BLOCK_BRIDGE_MIN_PROMINENCE = 2.0
 CAMERA_PEER_BLOCK_BRIDGE_MIN_OVERLAP_SECONDS = 10.0
 CAMERA_PEER_BLOCK_BRIDGE_BASE_TOLERANCE_SECONDS = 3.0
 CAMERA_PEER_BLOCK_BRIDGE_MIN_METADATA_IMPROVEMENT_SECONDS = 30.0
+INVISIBLE_ANCHOR_MAX_EXTRA_CLIPS_PER_CAMERA = 8
+INVISIBLE_ANCHOR_FORWARD_RADIUS = 10
+INVISIBLE_ANCHOR_BACKWARD_RADIUS = 3
+INVISIBLE_ANCHOR_NEAR_FORWARD_COUNT = 6
+INVISIBLE_ANCHOR_LONG_FORWARD_COUNT = 2
+INVISIBLE_ANCHOR_BACKWARD_COUNT = 2
 FILE_SPANNING_TOLERANCE_SECONDS = 3.0
 FILE_SPANNING_MIN_PREVIOUS_DURATION_SECONDS = 300.0
 FILE_SPANNING_LOW_Z_SCORE_THRESHOLD = 6.0
@@ -143,6 +149,7 @@ class PreparedClip:
     original_index: int
     cache_hit_wav: bool = False
     cache_hit_features: bool = False
+    is_invisible_anchor: bool = False
 
 
 @dataclass(frozen=True)
@@ -1938,6 +1945,70 @@ def sync_multiple_tracks_hybrid(
                 extra_metadata={"error": str(exc), "metadata_ignored": ignore_metadata},
             )
 
+    selected_matches = list(matches)
+    invisible_anchor_support = {
+        "enabled": bool(explicit_selection and ignore_metadata and use_camera_clock_model),
+        "triggered": False,
+        "used": False,
+        "max_extra_clips_per_camera": INVISIBLE_ANCHOR_MAX_EXTRA_CLIPS_PER_CAMERA,
+        "forward_radius": INVISIBLE_ANCHOR_FORWARD_RADIUS,
+        "backward_radius": INVISIBLE_ANCHOR_BACKWARD_RADIUS,
+        "near_forward_count": INVISIBLE_ANCHOR_NEAR_FORWARD_COUNT,
+        "long_forward_count": INVISIBLE_ANCHOR_LONG_FORWARD_COUNT,
+        "backward_count": INVISIBLE_ANCHOR_BACKWARD_COUNT,
+        "cameras_requiring_support": [],
+        "candidate_files_by_camera": {},
+        "accepted_files_by_camera": {},
+        "accepted_count": 0,
+    }
+    if explicit_selection and ignore_metadata and use_camera_clock_model and selected_matches:
+        risky_cameras = cameras_missing_visible_anchor(selected_matches, master_reference)
+        invisible_anchor_support["cameras_requiring_support"] = risky_cameras
+        if risky_cameras:
+            invisible_anchor_support["triggered"] = True
+            logger.warning(
+                "Apoio invisivel ativado: camera(s) sem ancora elegivel na selecao: %s",
+                ", ".join(risky_cameras),
+            )
+            support_files_by_camera = discover_invisible_anchor_files(
+                target_files,
+                camera_map,
+                risky_cameras,
+            )
+            invisible_anchor_support["candidate_files_by_camera"] = {
+                camera_name: [str(path) for path in paths]
+                for camera_name, paths in support_files_by_camera.items()
+            }
+            raw_support_matches = build_invisible_anchor_matches(
+                support_files_by_camera,
+                references=references,
+                master_reference=master_reference,
+                reference_start=reference_start,
+                ignore_metadata=ignore_metadata,
+                selected_match_count=len(selected_matches),
+            )
+            accepted_support_matches = keep_useful_invisible_anchor_matches(
+                selected_matches,
+                raw_support_matches,
+                master_reference,
+            )
+            if accepted_support_matches:
+                matches.extend(accepted_support_matches)
+                invisible_anchor_support["used"] = True
+                invisible_anchor_support["accepted_count"] = len(accepted_support_matches)
+                accepted_by_camera: dict[str, list[str]] = {}
+                for support_match in accepted_support_matches:
+                    accepted_by_camera.setdefault(
+                        support_match.clip.camera_name,
+                        [],
+                    ).append(str(support_match.clip.path))
+                invisible_anchor_support["accepted_files_by_camera"] = accepted_by_camera
+        else:
+            logger.info("Apoio invisivel nao necessario: todas as cameras tem ancora elegivel.")
+
+    visible_matches = [match for match in matches if not match.clip.is_invisible_anchor]
+    support_matches = [match for match in matches if match.clip.is_invisible_anchor]
+    results.setdefault("metadata", {})["invisible_anchor_support"] = invisible_anchor_support
     results["reference"] = str(master_reference.path)
     results["references"] = reference_result_entries(references, master_reference)
     results["metadata"].update(
@@ -1950,8 +2021,8 @@ def sync_multiple_tracks_hybrid(
             "audio_cache_dir": str(AUDIO_CACHE_DIR),
             "reference_cache_hit_wav_count": sum(1 for reference in references if reference.cache_hit_wav),
             "reference_cache_hit_features_count": sum(1 for reference in references if reference.cache_hit_features),
-            "target_cache_hit_wav_count": sum(1 for match in matches if match.clip.cache_hit_wav),
-            "target_cache_hit_features_count": sum(1 for match in matches if match.clip.cache_hit_features),
+            "target_cache_hit_wav_count": sum(1 for match in visible_matches if match.clip.cache_hit_wav),
+            "target_cache_hit_features_count": sum(1 for match in visible_matches if match.clip.cache_hit_features),
             "offsets_are_master_unified": True,
             "offset_scale": "master_reference_anchor",
             "reference_match_scope": "all_references_master_unified",
@@ -1975,10 +2046,12 @@ def sync_multiple_tracks_hybrid(
             "camera_peer_refine_min_overlap_seconds": CAMERA_PEER_REFINE_MIN_OVERLAP_SECONDS,
             "camera_audio_source": "embedded_mp4",
             "camera_audio_uses_extracted_wav": False,
+            "invisible_anchor_cache_hit_wav_count": sum(1 for match in support_matches if match.clip.cache_hit_wav),
+            "invisible_anchor_cache_hit_features_count": sum(1 for match in support_matches if match.clip.cache_hit_features),
         }
     )
 
-    placements = build_camera_block_placements(
+    all_placements = build_camera_block_placements(
         matches,
         master_reference,
         references=references,
@@ -1986,6 +2059,111 @@ def sync_multiple_tracks_hybrid(
         camera_offset_seconds_by_name=camera_offset_seconds_by_name or {},
         use_camera_clock_model=use_camera_clock_model,
     )
+    invisible_anchor_placements = [
+        placement for placement in all_placements if placement.match.clip.is_invisible_anchor
+    ]
+    placements = [
+        placement for placement in all_placements if not placement.match.clip.is_invisible_anchor
+    ]
+    if invisible_anchor_placements:
+        support_metadata = results.setdefault("metadata", {}).setdefault(
+            "invisible_anchor_support",
+            {},
+        )
+        support_metadata["prepared_count"] = len(invisible_anchor_placements)
+        support_metadata["prepared_offsets_by_camera"] = {}
+        for support_placement in invisible_anchor_placements:
+            support_metadata["prepared_offsets_by_camera"].setdefault(
+                support_placement.match.clip.camera_name,
+                [],
+            ).append(
+                {
+                    "file_name": support_placement.match.clip.path.name,
+                    "path": str(support_placement.match.clip.path),
+                    "final_offset_seconds": support_placement.final_offset_seconds,
+                    "sync_method": support_placement.method,
+                    "z_score": support_placement.match.chosen_result.z_score,
+                }
+            )
+
+    placements, blocked_invisible_anchor_placements = split_unsafe_invisible_anchor_placements(
+        placements
+    )
+    if blocked_invisible_anchor_placements:
+        support_metadata = results.setdefault("metadata", {}).setdefault(
+            "invisible_anchor_support",
+            {},
+        )
+        blocked_by_camera: dict[str, list[str]] = {}
+        blocked_reasons_by_camera: dict[str, list[dict]] = {}
+        for blocked_placement in blocked_invisible_anchor_placements:
+            blocked_clip = blocked_placement.match.clip
+            blocked_by_camera.setdefault(blocked_clip.camera_name, []).append(
+                str(blocked_clip.path)
+            )
+            blocked_reasons_by_camera.setdefault(blocked_clip.camera_name, []).append(
+                {
+                    "file_name": blocked_clip.path.name,
+                    "method": blocked_placement.method,
+                    "anchor_file_name": blocked_placement.anchor_match.clip.path.name,
+                    "anchor_path": str(blocked_placement.anchor_match.clip.path),
+                    "candidate_offset_seconds": blocked_placement.final_offset_seconds,
+                    "reason": "sem_refino_local_ou_ponte_confiavel",
+                }
+            )
+            logger.warning(
+                "Apoio invisivel bloqueado: %s/%s nao teve confirmacao local segura; clip marcado como falha.",
+                blocked_clip.camera_name,
+                blocked_clip.path.name,
+            )
+            register_skipped_clip(
+                results,
+                blocked_clip,
+                reason="invisible_anchor_unverified",
+                extra_metadata={
+                    "camera_name": blocked_clip.camera_name,
+                    "metadata_ignored": ignore_metadata,
+                    "chosen_reference_path": str(blocked_placement.match.chosen_reference.path),
+                    "chosen_reference_name": blocked_placement.match.chosen_reference.name,
+                    "sync_method": blocked_placement.method,
+                    "offset_decision_reason": (
+                        "ancora_invisivel_sem_confirmacao_segura; "
+                        f"metodo_candidato={blocked_placement.method}; "
+                        f"ancora={blocked_placement.anchor_match.clip.path.name}"
+                    ),
+                    "correlation_source": blocked_placement.match.chosen_result.source,
+                    "correlation_z_score": blocked_placement.match.chosen_result.z_score,
+                    "correlation_prominence_ratio": (
+                        blocked_placement.match.chosen_result.prominence_ratio
+                    ),
+                    "individual_dsp_offset_seconds": (
+                        blocked_placement.individual_dsp_offset_seconds
+                    ),
+                    "camera_native_predicted_offset_seconds": (
+                        blocked_placement.camera_native_predicted_offset_seconds
+                    ),
+                    "camera_clock_model_offset_seconds": (
+                        blocked_placement.camera_clock_model_offset_seconds
+                    ),
+                    "camera_block_anchor_name": (
+                        blocked_placement.anchor_match.clip.path.name
+                    ),
+                    "camera_block_anchor_path": str(blocked_placement.anchor_match.clip.path),
+                    "camera_block_anchor_is_invisible": True,
+                    "candidate_final_offset_seconds": blocked_placement.final_offset_seconds,
+                },
+            )
+        support_metadata["safety_status"] = "blocked"
+        support_metadata["blocked_cameras"] = sorted(blocked_by_camera)
+        support_metadata["blocked_files_by_camera"] = blocked_by_camera
+        support_metadata["blocked_reasons_by_camera"] = blocked_reasons_by_camera
+    else:
+        results.setdefault("metadata", {}).setdefault(
+            "invisible_anchor_support",
+            {},
+        ).setdefault("safety_status", "ok")
+
+    invisible_anchor_usage: list[dict] = []
     for placement in placements:
         match = placement.match
         clip = match.clip
@@ -2113,6 +2291,7 @@ def sync_multiple_tracks_hybrid(
             "camera_block_anchor_path": str(placement.anchor_match.clip.path),
             "camera_block_anchor_name": placement.anchor_match.clip.path.name,
             "camera_block_anchor_z_score": placement.anchor_match.chosen_result.z_score,
+            "camera_block_anchor_is_invisible": placement.anchor_match.clip.is_invisible_anchor,
             "camera_block_anchor_prominence_ratio": (
                 placement.anchor_match.chosen_result.prominence_ratio
             ),
@@ -2150,6 +2329,17 @@ def sync_multiple_tracks_hybrid(
             "master_unified_offset": True,
         }
 
+        if placement.anchor_match.clip.is_invisible_anchor:
+            invisible_anchor_usage.append(
+                {
+                    "camera_name": clip.camera_name,
+                    "target_file_name": clip.path.name,
+                    "anchor_file_name": placement.anchor_match.clip.path.name,
+                    "anchor_path": str(placement.anchor_match.clip.path),
+                    "anchor_z_score": placement.anchor_match.chosen_result.z_score,
+                }
+            )
+
         if ignore_metadata:
             logger.info(
                 "Offset final unificado: %s | master=%s | ref_match=%s | delta_ref=%.6fs | correlacao %.6fs | final %.6fs",
@@ -2169,6 +2359,12 @@ def sync_multiple_tracks_hybrid(
                 chosen_result.offset_seconds,
                 placement.final_offset_seconds,
             )
+
+    if invisible_anchor_usage:
+        results.setdefault("metadata", {}).setdefault(
+            "invisible_anchor_support",
+            {},
+        )["used_as_anchor"] = invisible_anchor_usage
 
     return results
 
@@ -2494,6 +2690,313 @@ def group_matches_by_camera(matches: list[ClipSyncMatch]) -> dict[str, list[Clip
     for match in matches:
         grouped.setdefault(match.clip.camera_name, []).append(match)
     return grouped
+
+
+
+def split_unsafe_invisible_anchor_placements(
+    placements: list[CameraBlockPlacement],
+) -> tuple[list[CameraBlockPlacement], list[CameraBlockPlacement]]:
+    grouped: dict[str, list[CameraBlockPlacement]] = {}
+    for placement in placements:
+        if placement.anchor_match.clip.is_invisible_anchor:
+            grouped.setdefault(placement.match.clip.camera_name, []).append(placement)
+
+    unsafe_cameras = {
+        camera_name
+        for camera_name, camera_placements in grouped.items()
+        if any(
+            not has_safe_invisible_anchor_confirmation(placement)
+            for placement in camera_placements
+        )
+    }
+    if not unsafe_cameras:
+        return placements, []
+
+    kept: list[CameraBlockPlacement] = []
+    blocked: list[CameraBlockPlacement] = []
+    for placement in placements:
+        if (
+            placement.match.clip.camera_name in unsafe_cameras
+            and placement.anchor_match.clip.is_invisible_anchor
+        ):
+            blocked.append(placement)
+        else:
+            kept.append(placement)
+    return kept, blocked
+
+
+def has_safe_invisible_anchor_confirmation(placement: CameraBlockPlacement) -> bool:
+    if not placement.anchor_match.clip.is_invisible_anchor:
+        return True
+    if is_usable_camera_local_refinement(placement.local_refinement):
+        return True
+    if placement.peer_refinement is not None:
+        return True
+    return "peer_bridge" in placement.method or "peer_refine" in placement.method
+
+def cameras_missing_visible_anchor(
+    matches: list[ClipSyncMatch],
+    master_reference: PreparedReference,
+) -> list[str]:
+    missing: list[str] = []
+    for camera_name, camera_matches in group_matches_by_camera(matches).items():
+        visible_matches = [
+            match for match in camera_matches if not match.clip.is_invisible_anchor
+        ]
+        if not visible_matches:
+            continue
+        if not camera_has_eligible_anchor(visible_matches, master_reference):
+            missing.append(camera_name)
+    return missing
+
+
+def camera_has_eligible_anchor(
+    camera_matches: list[ClipSyncMatch],
+    master_reference: PreparedReference,
+) -> bool:
+    try:
+        native_timing = build_camera_native_timing(camera_matches)
+        candidates = build_camera_anchor_candidates(
+            camera_matches,
+            native_timing,
+            master_reference,
+        )
+    except ValueError:
+        return False
+    return any(candidate.eligible_as_anchor for candidate in candidates)
+
+
+def discover_invisible_anchor_files(
+    selected_target_files: list[Path],
+    camera_map: dict[str, str],
+    risky_camera_names: list[str],
+) -> dict[str, list[Path]]:
+    if not risky_camera_names:
+        return {}
+
+    risky_set = set(risky_camera_names)
+    selected_keys = {normalized_path_key(path) for path in selected_target_files}
+    selected_by_camera: dict[str, list[Path]] = {}
+    for target_file in selected_target_files:
+        camera_name = camera_map.get(str(target_file)) or target_file.parent.name or "CAM 01"
+        if camera_name in risky_set:
+            selected_by_camera.setdefault(camera_name, []).append(target_file)
+
+    support_by_camera: dict[str, list[Path]] = {}
+    for camera_name, selected_files in selected_by_camera.items():
+        ordered_candidates: list[Path] = []
+        seen_candidates: set[str] = set()
+
+        def add_candidate(candidate: Path) -> None:
+            candidate_key = normalized_path_key(candidate)
+            if candidate_key in selected_keys or candidate_key in seen_candidates:
+                return
+            seen_candidates.add(candidate_key)
+            ordered_candidates.append(candidate)
+
+        for parent in sorted({path.parent for path in selected_files}, key=lambda item: str(item).casefold()):
+            try:
+                camera_files = [
+                    item.resolve()
+                    for item in parent.iterdir()
+                    if item.is_file()
+                    and item.suffix.lower() in VIDEO_EXTENSIONS
+                    and not is_ignored_path(item)
+                    and not is_proxy_file(item)
+                ]
+            except OSError as exc:
+                logger.warning(
+                    "Apoio invisivel ignorado para %s: nao foi possivel ler %s: %s",
+                    camera_name,
+                    parent,
+                    exc,
+                )
+                continue
+
+            camera_files.sort(key=lambda item: (natural_path_key(item), str(item).casefold()))
+            index_by_key = {
+                normalized_path_key(path): index for index, path in enumerate(camera_files)
+            }
+            selected_indices = [
+                index_by_key[normalized_path_key(path)]
+                for path in selected_files
+                if normalized_path_key(path) in index_by_key
+            ]
+            if not selected_indices:
+                continue
+
+            min_selected_index = min(selected_indices)
+            max_selected_index = max(selected_indices)
+            forward_end = min(
+                len(camera_files) - 1,
+                max_selected_index + INVISIBLE_ANCHOR_FORWARD_RADIUS,
+            )
+            forward_indices = list(range(max_selected_index + 1, forward_end + 1))
+            for index in forward_indices[:INVISIBLE_ANCHOR_NEAR_FORWARD_COUNT]:
+                add_candidate(camera_files[index])
+
+            near_forward_keys = {
+                normalized_path_key(camera_files[index])
+                for index in forward_indices[:INVISIBLE_ANCHOR_NEAR_FORWARD_COUNT]
+            }
+            long_forward_indices = sorted(
+                [
+                    index
+                    for index in forward_indices
+                    if normalized_path_key(camera_files[index]) not in near_forward_keys
+                ],
+                key=lambda index: (
+                    -safe_file_size(camera_files[index]),
+                    index - max_selected_index,
+                    natural_path_key(camera_files[index]),
+                    str(camera_files[index]).casefold(),
+                ),
+            )
+            for index in long_forward_indices[:INVISIBLE_ANCHOR_LONG_FORWARD_COUNT]:
+                add_candidate(camera_files[index])
+
+            backward_start = max(0, min_selected_index - INVISIBLE_ANCHOR_BACKWARD_RADIUS)
+            backward_indices = list(range(min_selected_index - 1, backward_start - 1, -1))
+            backward_indices.sort(
+                key=lambda index: (
+                    min_selected_index - index,
+                    -safe_file_size(camera_files[index]),
+                    natural_path_key(camera_files[index]),
+                    str(camera_files[index]).casefold(),
+                )
+            )
+            for index in backward_indices[:INVISIBLE_ANCHOR_BACKWARD_COUNT]:
+                add_candidate(camera_files[index])
+
+        support_files = ordered_candidates[:INVISIBLE_ANCHOR_MAX_EXTRA_CLIPS_PER_CAMERA]
+        if support_files:
+            support_by_camera[camera_name] = sort_targets_for_batch(
+                support_files,
+                {str(path): camera_name for path in support_files},
+                ignore_metadata=True,
+            )
+            logger.info(
+                "Apoio invisivel candidatos: %s | %s",
+                camera_name,
+                ", ".join(path.name for path in support_by_camera[camera_name]),
+            )
+
+    return support_by_camera
+
+
+def safe_file_size(path: Path) -> int:
+    try:
+        return int(path.stat().st_size)
+    except OSError:
+        return 0
+
+
+def normalized_path_key(path: Path) -> str:
+    try:
+        return str(path.resolve()).casefold()
+    except OSError:
+        return str(path).casefold()
+
+
+def build_invisible_anchor_matches(
+    support_files_by_camera: dict[str, list[Path]],
+    *,
+    references: list[PreparedReference],
+    master_reference: PreparedReference,
+    reference_start: float | None,
+    ignore_metadata: bool,
+    selected_match_count: int,
+) -> list[ClipSyncMatch]:
+    support_files = [
+        path for paths in support_files_by_camera.values() for path in paths
+    ]
+    if not support_files:
+        return []
+
+    support_camera_map = {
+        str(path): camera_name
+        for camera_name, paths in support_files_by_camera.items()
+        for path in paths
+    }
+    sorted_support_files = sort_targets_for_batch(
+        support_files,
+        support_camera_map,
+        ignore_metadata=True,
+    )
+    support_clips = prepare_target_clips(
+        target_files=sorted_support_files,
+        reference_start=reference_start,
+        camera_map=support_camera_map,
+        ignore_metadata=ignore_metadata,
+        results=None,
+        invisible_anchor=True,
+        original_index_start=selected_match_count,
+        log_label="apoio invisivel",
+    )
+
+    support_matches: list[ClipSyncMatch] = []
+    for index, clip in enumerate(support_clips, start=1):
+        logger.info(
+            "Full Scan apoio invisivel %d/%d: %s | camera=%s | %d referencia(s)",
+            index,
+            len(support_clips),
+            clip.path.name,
+            clip.camera_name,
+            len(references),
+        )
+        chosen_reference, chosen_result = find_best_reference_match(
+            references,
+            clip.features,
+            master_reference=master_reference,
+            estimated_master_offset_seconds=clip.estimated_offset_seconds,
+        )
+        if chosen_result.z_score < MIN_FULL_SCAN_Z_SCORE:
+            logger.warning(
+                "Apoio invisivel rejeitado para %s: z-score %.2f < %.2f.",
+                clip.path.name,
+                chosen_result.z_score,
+                MIN_FULL_SCAN_Z_SCORE,
+            )
+            continue
+        support_matches.append(
+            ClipSyncMatch(
+                clip=clip,
+                chosen_reference=chosen_reference,
+                chosen_result=chosen_result,
+                window_result=None,
+                target_features=clip.features,
+                metadata_ignored=ignore_metadata,
+            )
+        )
+    return support_matches
+
+
+def keep_useful_invisible_anchor_matches(
+    selected_matches: list[ClipSyncMatch],
+    support_matches: list[ClipSyncMatch],
+    master_reference: PreparedReference,
+) -> list[ClipSyncMatch]:
+    if not support_matches:
+        return []
+
+    selected_by_camera = group_matches_by_camera(selected_matches)
+    support_by_camera = group_matches_by_camera(support_matches)
+    kept: list[ClipSyncMatch] = []
+    for camera_name, camera_support_matches in support_by_camera.items():
+        combined = [*selected_by_camera.get(camera_name, []), *camera_support_matches]
+        if camera_has_eligible_anchor(combined, master_reference):
+            kept.extend(camera_support_matches)
+            logger.info(
+                "Apoio invisivel aceito: %s | %d clipe(s) auxiliar(es).",
+                camera_name,
+                len(camera_support_matches),
+            )
+        else:
+            logger.warning(
+                "Apoio invisivel descartado: %s continuou sem ancora elegivel.",
+                camera_name,
+            )
+    return kept
 
 
 def should_use_individual_camera_offset(
@@ -4083,10 +4586,20 @@ def prepare_target_clips(
     camera_map: dict[str, str],
     ignore_metadata: bool = False,
     results: dict | None = None,
+    invisible_anchor: bool = False,
+    original_index_start: int = 0,
+    log_label: str = "alvo",
 ) -> list[PreparedClip]:
     clips: list[PreparedClip] = []
-    for index, target_file in enumerate(target_files, start=1):
-        logger.info("Preparando alvo %d/%d: %s", index, len(target_files), target_file.name)
+    for position, target_file in enumerate(target_files, start=1):
+        index = original_index_start + position
+        logger.info(
+            "Preparando %s %d/%d: %s",
+            log_label,
+            position,
+            len(target_files),
+            target_file.name,
+        )
         try:
             cached_audio = prepare_cached_audio_features(
                 target_file,
@@ -4135,6 +4648,7 @@ def prepare_target_clips(
                 original_index=index,
                 cache_hit_wav=cached_audio.cache_hit_wav,
                 cache_hit_features=cached_audio.cache_hit_features,
+                is_invisible_anchor=invisible_anchor,
             )
         )
 
@@ -4843,8 +5357,23 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
     print(build_summary(sync_results, generated_xml))
 
+    final_metadata = sync_results.get("metadata") or {}
+    final_track_check = final_metadata.get("track_check") or {}
+    final_sync_quality = final_metadata.get("sync_quality") or {}
     failed_count = sum(1 for offset in (sync_results.get("offsets") or {}).values() if offset is None)
-    return 2 if failed_count else 0
+    track_overlap_count = int(final_track_check.get("total_overlap_count") or 0)
+    sync_guard_count = int(final_sync_quality.get("blocking_issue_count") or 0)
+    if sync_guard_count:
+        logger.error(
+            "SyncGuard bloqueou o resultado: %d alerta(s) de risco alto exigem revisao.",
+            sync_guard_count,
+        )
+    if track_overlap_count:
+        logger.error(
+            "TrackCheck bloqueou o resultado: %d sobreposicao(oes) detectada(s).",
+            track_overlap_count,
+        )
+    return 2 if failed_count or track_overlap_count or sync_guard_count else 0
 
 
 def main(argv: list[str] | None = None) -> int:

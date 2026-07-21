@@ -13,6 +13,8 @@ TRACK_CHECK_OVERLAP_TOLERANCE_SECONDS = 1.0 / 30.0
 REFERENCE_COVERAGE_MIN_SECONDS = 10.0
 REFERENCE_COVERAGE_MIN_RATIO = 0.05
 SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS = 10.0
+SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_RATIO = 0.25
+SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_SECONDS = 90.0
 
 logger = logging.getLogger("wavesync.pipeline")
 
@@ -78,6 +80,8 @@ AUDIT_COLUMNS = [
     "camera_base_deviation_seconds",
     "camera_block_anchor_name",
     "camera_block_anchor_z_score",
+    "camera_block_anchor_is_invisible",
+    "camera_block_anchor_path",
     "spanning_continuity_applied",
     "spanning_previous_path",
     "spanning_gap_seconds",
@@ -295,6 +299,10 @@ def build_sync_audit_rows(sync_results: dict) -> list[dict]:
                 "camera_block_anchor_z_score": first_number(
                     item_metadata.get("camera_block_anchor_z_score")
                 ),
+                "camera_block_anchor_is_invisible": bool(
+                    item_metadata.get("camera_block_anchor_is_invisible")
+                ),
+                "camera_block_anchor_path": item_metadata.get("camera_block_anchor_path"),
                 "spanning_continuity_applied": bool(
                     item_metadata.get("spanning_continuity_applied")
                 ),
@@ -387,6 +395,9 @@ def annotate_sync_quality(rows: list[dict], references: list[dict]) -> dict:
 
     high_risk_count = counts.get("RISCO_ALTO", 0)
     attention_count = counts.get("ATENCAO", 0)
+    blocking_issues = [
+        issue for issue in issues if is_blocking_sync_quality_issue(issue)
+    ]
     if high_risk_count:
         overall_status = f"RISCO_ALTO ({high_risk_count})"
     elif attention_count:
@@ -400,11 +411,24 @@ def annotate_sync_quality(rows: list[dict], references: list[dict]) -> dict:
         "issue_count": len(issues),
         "high_risk_count": high_risk_count,
         "attention_count": attention_count,
+        "blocking_issue_count": len(blocking_issues),
+        "blocking_issues": blocking_issues,
         "reference_coverage_min_seconds": REFERENCE_COVERAGE_MIN_SECONDS,
         "reference_coverage_min_ratio": REFERENCE_COVERAGE_MIN_RATIO,
+        "weak_partial_coverage_ratio": SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_RATIO,
+        "weak_partial_coverage_seconds": SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_SECONDS,
         "large_dsp_delta_seconds": SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS,
         "issues": issues,
     }
+
+
+def is_blocking_sync_quality_issue(issue: dict) -> bool:
+    if issue.get("status") != "RISCO_ALTO":
+        return False
+    reasons = [str(reason) for reason in (issue.get("reasons") or [])]
+    if not reasons:
+        return True
+    return any(not reason.startswith("referencia_sem_cobertura:") for reason in reasons)
 
 
 def reference_coverage_intervals(references: list[dict]) -> list[dict]:
@@ -492,26 +516,9 @@ def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
     attention = False
 
     coverage_status = str(coverage.get("status") or "unknown")
+    coverage_seconds = first_number(coverage.get("overlap_seconds"))
+    coverage_ratio = first_number(coverage.get("coverage_ratio"))
     peer_confirmed = is_peer_confirmed(row)
-    if coverage_status in {
-        "after_reference_end",
-        "before_reference_start",
-        "outside_reference_coverage",
-        "no_references",
-    }:
-        if peer_confirmed:
-            attention = True
-            reasons.append(f"sem_lapela_confirmado_por_camera:{coverage_status}")
-        else:
-            high_risk = True
-            reasons.append(f"referencia_sem_cobertura:{coverage_status}")
-    elif coverage_status in {
-        "partial_reference_coverage",
-        "covered_with_tail_after_reference",
-    }:
-        attention = True
-        reasons.append(f"cobertura_parcial:{coverage_status}")
-
     final_vs_individual = first_number(row.get("individual_vs_final_delta_seconds"))
     sync_method = str(row.get("sync_method") or "")
     local_delta = first_number(row.get("camera_local_refine_delta_seconds"))
@@ -519,6 +526,7 @@ def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
     peer_delta = first_number(row.get("camera_peer_refine_delta_seconds"))
     peer_z = first_number(row.get("camera_peer_refine_z_score"))
     final_z = first_number(row.get("correlation_z_score"))
+    clock_inliers = first_number(row.get("camera_clock_inlier_count"))
 
     local_or_peer_confirmed = (
         local_delta is not None
@@ -532,13 +540,57 @@ def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
         and peer_z >= 2.5
     )
 
+    outside_reference_statuses = {
+        "after_reference_end",
+        "before_reference_start",
+        "outside_reference_coverage",
+        "no_references",
+    }
+    partial_reference_statuses = {
+        "partial_reference_coverage",
+        "covered_after_camera_preroll",
+        "covered_with_tail_after_reference",
+    }
+
+    if coverage_status in outside_reference_statuses:
+        attention = True
+        if peer_confirmed:
+            reasons.append(f"sem_lapela_confirmado_por_camera:{coverage_status}")
+        else:
+            reasons.append(f"referencia_sem_cobertura:{coverage_status}")
+    elif coverage_status in partial_reference_statuses:
+        attention = True
+        reasons.append(f"cobertura_parcial:{coverage_status}")
+        weak_partial_coverage = (
+            coverage_ratio is not None
+            and coverage_ratio < SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_RATIO
+            and coverage_seconds is not None
+            and coverage_seconds < SYNC_QUALITY_WEAK_PARTIAL_COVERAGE_SECONDS
+        )
+        weakly_supported_anchor = (
+            sync_method
+            in {"camera_block_anchor_individual_dsp", "camera_block_individual_dsp"}
+            and (clock_inliers is None or clock_inliers < 1)
+            and not local_or_peer_confirmed
+        )
+        if weak_partial_coverage and weakly_supported_anchor:
+            high_risk = True
+            reasons.append(
+                "cobertura_parcial_fraca_sem_confirmacao:"
+                f"{coverage_seconds:.3f}s/{coverage_ratio:.3f}"
+            )
+
     if (
         final_vs_individual is not None
         and abs(final_vs_individual) > SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS
         and "native" in sync_method
         and not local_or_peer_confirmed
     ):
-        if final_z is not None and final_z >= 8.0:
+        if (
+            coverage_status not in outside_reference_statuses
+            and final_z is not None
+            and final_z >= 8.0
+        ):
             high_risk = True
         else:
             attention = True
@@ -556,7 +608,6 @@ def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
     if attention:
         return "ATENCAO", reasons
     return "OK", reasons
-
 
 def build_camera_audit_summary(rows: list[dict]) -> list[dict]:
     grouped: dict[str, list[dict]] = {}
@@ -751,6 +802,7 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
     track_check = metadata.get("track_check") or {}
     sync_quality = metadata.get("sync_quality") or {}
     sync_quality_status = sync_quality.get("overall_status", "n/a")
+    sync_guard_count = int(sync_quality.get("blocking_issue_count") or 0)
     track_overlap_count = int(track_check.get("total_overlap_count") or 0)
     reference_count = int(metadata.get("reference_count") or 0)
     success_count = len(successful)
@@ -758,6 +810,9 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
     target_cache_hits = int(metadata.get("target_cache_hit_features_count") or 0)
     auto_cache_cleanup = metadata.get("auto_cache_cleanup") or {}
     cache_auto_summary = format_auto_cache_cleanup(auto_cache_cleanup)
+    invisible_anchor_summary = format_invisible_anchor_support(
+        metadata.get("invisible_anchor_support") or {}
+    )
 
     lines = [
         "",
@@ -776,9 +831,11 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
         f"Cam Offset : {metadata.get('camera_global_offset_seconds', 0.0)}s",
         f"Cam Ajustes: {metadata.get('camera_offset_seconds_by_name', {})}",
         f"Clock Model: {metadata.get('use_camera_clock_model', False)}",
+        f"Ancora Aux : {invisible_anchor_summary}",
         f"Spanning   : {metadata.get('spanning_continuity_adjustment_count', 0)} ajuste(s)",
         f"TrackCheck : {'OK' if track_overlap_count == 0 else f'{track_overlap_count} overlap(s)'}",
         f"SyncCheck  : {sync_quality_status}",
+        f"SyncGuard  : {'BLOQUEIO' if sync_guard_count else 'OK'}",
         f"Cache DSP  : refs {reference_cache_hits}/{reference_count} | targets {target_cache_hits}/{success_count}",
         f"Cache Auto : {cache_auto_summary}",
         f"XML        : {output_xml_path}",
@@ -832,6 +889,26 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
 
     lines.append("=" * 72)
     return "\n".join(lines)
+
+
+
+def format_invisible_anchor_support(value: object) -> str:
+    if not isinstance(value, dict) or not value:
+        return "n/a"
+    if not value.get("enabled"):
+        return "desativada"
+    if not value.get("triggered"):
+        return "nao necessario"
+    cameras = value.get("cameras_requiring_support") or []
+    camera_count = len(cameras) if isinstance(cameras, list) else 0
+    accepted_count = int(value.get("accepted_count") or 0)
+    blocked_cameras = value.get("blocked_cameras") or []
+    blocked_count = len(blocked_cameras) if isinstance(blocked_cameras, list) else 0
+    if blocked_count:
+        return f"bloqueada ({blocked_count} camera(s) sem confirmacao segura)"
+    if value.get("used"):
+        return f"usada ({accepted_count} apoio(s), {camera_count} camera(s))"
+    return f"tentada sem apoio util ({camera_count} camera(s))"
 
 
 def format_auto_cache_cleanup(value: object) -> str:
