@@ -1,7 +1,7 @@
 """Simple Tkinter desktop UI for WaveSync.
 
 Run:
-  python tkinter_app.py
+  python WaveSync.py
 
 The user only chooses audio references, chooses camera videos, and clicks sync.
 The selection JSON is generated automatically in the background.

@@ -26,7 +26,7 @@ Fluxo rapido:
 ```text
 Instalar_Python39_E_Dependencias.bat  Instala Python 3.9/dependencias e abre a interface
 requirements.txt                      Dependencias Python
-tkinter_app.py                        Interface grafica local
+WaveSync.py                        Interface grafica local
 main.py                               Motor principal de sincronizacao
 backend/audio_processor.py            Extracao e features DSP
 backend/xml_generator.py              Geracao do XML para Premiere
@@ -42,7 +42,7 @@ tools/make_config.py                  Gerador de config usado pela interface
 Se o Python e as dependencias ja estiverem instalados:
 
 ```powershell
-python tkinter_app.py
+python WaveSync.py
 ```
 
 ## Organizacao Das Tracks No Premiere

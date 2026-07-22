@@ -76,7 +76,7 @@ Enter.
 No PowerShell, rode:
 
 ```powershell
-python tkinter_app.py
+python WaveSync.py
 ```
 
 ## 5. Selecionar Os Audios
@@ -160,7 +160,7 @@ Rode novamente:
 Instalar_Python39_E_Dependencias.bat
 ```
 
-Se preferir abrir manualmente, use `python tkinter_app.py`.
+Se preferir abrir manualmente, use `python WaveSync.py`.
 
 ### O Python Nao Foi Encontrado
 
@@ -182,7 +182,7 @@ proximas vezes, ela abre mais rapido.
 Na pasta do projeto, rode:
 
 ```powershell
-python tkinter_app.py
+python WaveSync.py
 ```
 
 ## 11. Resumo Rapido

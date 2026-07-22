@@ -12,7 +12,7 @@ $Requirements = Join-Path $ProjectRoot "requirements.txt"
 $VenvDir = Join-Path $ProjectRoot ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $VenvPythonw = Join-Path $VenvDir "Scripts\pythonw.exe"
-$AppScript = Join-Path $ProjectRoot "tkinter_app.py"
+$AppScript = Join-Path $ProjectRoot "WaveSync.py"
 $SupportRelayConfig = Join-Path $ProjectRoot "support_relay.json"
 $SupportConfigAppData = if ($env:APPDATA) { Join-Path (Join-Path $env:APPDATA "WaveSync") "support_config.json" } else { $null }
 
@@ -218,7 +218,7 @@ function Open-App {
     }
 
     if (-not (Test-Path $AppScript)) {
-        Write-Host "[WARN] tkinter_app.py nao encontrado. Instalacao concluida, mas a interface nao foi aberta."
+        Write-Host "[WARN] WaveSync.py nao encontrado. Instalacao concluida, mas a interface nao foi aberta."
         return
     }
 
@@ -244,7 +244,7 @@ try {
 
     Write-Step "Instalacao concluida"
     Write-Host "[OK] Python 3.9 e dependencias estao prontos."
-    Write-Host "[OK] Para abrir depois, rode python tkinter_app.py na pasta do projeto."
+    Write-Host "[OK] Para abrir depois, rode python WaveSync.py na pasta do projeto."
 
     Open-App
     exit 0
