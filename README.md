@@ -25,7 +25,6 @@ Fluxo rapido:
 
 ```text
 Instalar_Python39_E_Dependencias.bat  Instala Python 3.9/dependencias e abre a interface
-TUTORIAL_USUARIO.md                   Tutorial para usuario leigo
 requirements.txt                      Dependencias Python
 tkinter_app.py                        Interface grafica local
 main.py                               Motor principal de sincronizacao
