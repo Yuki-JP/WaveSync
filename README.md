@@ -26,7 +26,7 @@ Fluxo rapido:
 ```text
 Instalar_Python39_E_Dependencias.bat  Instala Python 3.9/dependencias e abre a interface
 requirements.txt                      Dependencias Python
-WaveSync.py                        Interface grafica local
+WaveSync.py                           Interface grafica local
 main.py                               Motor principal de sincronizacao
 backend/audio_processor.py            Extracao e features DSP
 backend/xml_generator.py              Geracao do XML para Premiere
