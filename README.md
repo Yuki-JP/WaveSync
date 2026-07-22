@@ -1,7 +1,6 @@
 # WaveSync - Sync Multicamera
 
-Ferramenta Python para sincronizacao automatica de audio/video em fluxos reais
-de casamento, com exportacao FCP XML para Adobe Premiere.
+Ferramenta Python para sincronizacao automatica de audio/video, com exportacao FCP XML para Adobe Premiere.
 
 ## Para Usuario Final
 
