@@ -94,6 +94,9 @@ CAMERA_POST_CUT_NATIVE_LATE_THRESHOLD_SECONDS = 0.35
 CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS = 120.0
 CAMERA_POST_CUT_NATIVE_MAX_GAP_SECONDS = 3.0
 CAMERA_POST_CUT_LOCAL_MIN_PROMINENCE = 1.2
+CAMERA_SHORT_CLIP_NATIVE_MAX_DURATION_SECONDS = 20.0
+CAMERA_SHORT_CLIP_NATIVE_MAX_GAP_SECONDS = 60.0
+CAMERA_SHORT_CLIP_NATIVE_MAX_DELTA_SECONDS = 2.0
 CAMERA_PEER_REFINE_WINDOW_SECONDS = 8.0
 CAMERA_PEER_REFINE_MAX_DELTA_SECONDS = 0.8
 CAMERA_PEER_REFINE_MIN_Z_SCORE = 2.5
@@ -2521,6 +2524,28 @@ def build_camera_block_placements(
                         f"offset_nativo={predicted_offset:.6f}s; "
                         f"offset_modelo={clock_model_offset:.6f}s"
                     )
+                if method == "camera_clock_model":
+                    use_short_native_gap, short_native_gap_reason = (
+                        should_use_short_clip_native_gap_prediction(
+                            match=match,
+                            final_offset_seconds=final_offset,
+                            native_predicted_offset_seconds=predicted_offset,
+                            previous_final_end_seconds=previous_final_end,
+                            previous_duration_seconds=previous_duration_seconds,
+                            native_gap_from_previous_seconds=timing["gap_from_previous"],
+                            local_refinement=local_refinement,
+                            clock_residual_seconds=clock_residual,
+                        )
+                    )
+                    if use_short_native_gap:
+                        old_final_offset = final_offset
+                        final_offset = predicted_offset
+                        method = "camera_clock_native_gap_short_clip"
+                        decision_reason = (
+                            f"{decision_reason}; {short_native_gap_reason}; "
+                            f"offset_modelo={old_final_offset:.6f}s; "
+                            f"offset_nativo={predicted_offset:.6f}s"
+                        )
             elif use_camera_clock_model and individual_is_camera_base_outlier:
                 local_refinement = refine_camera_offset_near_prediction(
                     references,
@@ -2592,6 +2617,7 @@ def build_camera_block_placements(
                 "camera_clock_local_refine",
                 "camera_clock_post_cut_local_refine",
                 "camera_clock_native_post_cut",
+                "camera_clock_native_gap_short_clip",
                 "camera_base_local_refine",
                 "camera_base_native_outlier_fallback",
             }:
@@ -3680,6 +3706,82 @@ def should_use_native_post_cut_prediction(
     )
 
 
+def should_use_short_clip_native_gap_prediction(
+    *,
+    match: ClipSyncMatch,
+    final_offset_seconds: float,
+    native_predicted_offset_seconds: float,
+    previous_final_end_seconds: float | None,
+    previous_duration_seconds: float | None,
+    native_gap_from_previous_seconds: float | None,
+    local_refinement: LocalCameraRefinement | None,
+    clock_residual_seconds: float,
+) -> tuple[bool, str]:
+    if previous_final_end_seconds is None:
+        return False, "primeiro_clipe_da_camera"
+    if previous_duration_seconds is None:
+        return False, "duracao_anterior_indisponivel"
+    if previous_duration_seconds < CAMERA_POST_CUT_NATIVE_MIN_PREVIOUS_DURATION_SECONDS:
+        return False, f"clipe_anterior_curto={previous_duration_seconds:.3f}s"
+    if match.clip.duration_seconds > CAMERA_SHORT_CLIP_NATIVE_MAX_DURATION_SECONDS:
+        return False, f"clipe_nao_curto={match.clip.duration_seconds:.3f}s"
+    if native_gap_from_previous_seconds is None:
+        return False, "gap_nativo_indisponivel"
+    if native_gap_from_previous_seconds > CAMERA_SHORT_CLIP_NATIVE_MAX_GAP_SECONDS:
+        return (
+            False,
+            "gap_nativo_curto_grande_demais="
+            f"{native_gap_from_previous_seconds:.6f}s>"
+            f"{CAMERA_SHORT_CLIP_NATIVE_MAX_GAP_SECONDS:.3f}s",
+        )
+    if local_refinement is not None and is_usable_camera_local_refinement(local_refinement):
+        return False, "refino_local_util_preservado"
+
+    late_delta = final_offset_seconds - native_predicted_offset_seconds
+    if late_delta < CAMERA_POST_CUT_NATIVE_LATE_THRESHOLD_SECONDS:
+        return False, f"desvio_tardio_pequeno={late_delta:.6f}s"
+    if late_delta > CAMERA_SHORT_CLIP_NATIVE_MAX_DELTA_SECONDS:
+        return (
+            False,
+            "desvio_tardio_curto_grande_demais="
+            f"{late_delta:.6f}s>{CAMERA_SHORT_CLIP_NATIVE_MAX_DELTA_SECONDS:.3f}s",
+        )
+    if abs(clock_residual_seconds) < CAMERA_BASE_CONSENSUS_TOLERANCE_SECONDS:
+        return False, f"residuo_individual_pequeno={clock_residual_seconds:.6f}s"
+
+    native_gap_after_previous = native_predicted_offset_seconds - previous_final_end_seconds
+    if native_gap_after_previous < -CAMERA_ORDER_OVERLAP_TOLERANCE_SECONDS:
+        return False, f"previsao_nativa_sobrepoe_anterior={native_gap_after_previous:.6f}s"
+
+    return (
+        True,
+        "short_clip_native_gap_prediction:"
+        f"desvio_tardio={late_delta:.6f}s;"
+        f"gap_nativo={native_gap_from_previous_seconds:.6f}s;"
+        f"duracao={match.clip.duration_seconds:.3f}s;"
+        f"duracao_anterior={previous_duration_seconds:.3f}s;"
+        f"residuo_individual={clock_residual_seconds:.6f}s",
+    )
+
+
+def should_attempt_peer_camera_refinement_target(placement: CameraBlockPlacement) -> bool:
+    if placement.method in {
+        "camera_clock_native_post_cut",
+        "camera_clock_native_gap_short_clip",
+        "camera_base_native_outlier_fallback",
+    }:
+        return True
+
+    if placement.method == "camera_clock_local_refine":
+        refinement = placement.local_refinement
+        if refinement is None:
+            return False
+        return not (
+            refinement.result.z_score >= CAMERA_LOCAL_REFINE_STRONG_Z_SCORE
+            and refinement.result.prominence_ratio >= CAMERA_LOCAL_REFINE_STRONG_PROMINENCE
+        )
+
+    return False
 def apply_peer_camera_refinements(
     placements: list[CameraBlockPlacement],
     references: list[PreparedReference],
@@ -3692,10 +3794,7 @@ def apply_peer_camera_refinements(
             key=lambda index: updated[index].final_offset_seconds,
         ):
             placement = updated[placement_index]
-            if placement.method not in {
-                "camera_clock_native_post_cut",
-                "camera_base_native_outlier_fallback",
-            }:
+            if not should_attempt_peer_camera_refinement_target(placement):
                 continue
 
             refinement = find_best_peer_camera_refinement(
@@ -5337,7 +5436,26 @@ def run_pipeline(args: argparse.Namespace) -> int:
         camera_map=camera_map,
     )
     logger.info("XML gerado com sucesso: %s", generated_xml)
+    try:
+        from backend.audio_layout_report import write_audio_layout_reports
 
+        audio_layout_report = write_audio_layout_reports(generated_xml)
+        sync_results.setdefault("metadata", {})["audio_layout_report"] = audio_layout_report
+        logger.info(
+            "AudioLayout report: %s (%d alerta(s)) | CSV: %s | JSON: %s | TXT: %s",
+            audio_layout_report.get("status"),
+            int(audio_layout_report.get("issue_count") or 0),
+            audio_layout_report.get("csv"),
+            audio_layout_report.get("json"),
+            audio_layout_report.get("txt"),
+        )
+    except Exception as exc:
+        logger.warning("AudioLayout report falhou: %s", exc)
+        sync_results.setdefault("metadata", {})["audio_layout_report"] = {
+            "status": "ERRO",
+            "issue_count": 1,
+            "error": str(exc),
+        }
     try:
         cache_cleanup_result = update_cache_cleanup_after_completed_sync()
         sync_results.setdefault("metadata", {})["auto_cache_cleanup"] = cache_cleanup_result

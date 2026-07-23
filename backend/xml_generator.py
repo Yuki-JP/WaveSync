@@ -5,6 +5,7 @@ The timeline layout is camera-oriented:
 - one video track per camera/device/folder;
 - better cameras are placed higher in Premiere video tracks: Vn, ..., V2, V1;
 - camera native audio starts at A1 in the same quality priority order;
+- stereo camera audio is written as E/D lanes so Premiere keeps both source channels;
 - deduplicated reference audios start below native camera audio.
 """
 
@@ -97,6 +98,7 @@ def create_timeline_xml(
     children = ET.SubElement(project, "children")
 
     _add_project_media_bins(children, camera_groups, references, fps)
+    _assign_sequence_clip_links(video_camera_groups, audio_camera_groups)
 
     sequence = ET.SubElement(children, "sequence", id="sequence-1")
     ET.SubElement(sequence, "name").text = "Synced Sequence"
@@ -113,10 +115,11 @@ def create_timeline_xml(
     _add_reference_audio_tracks(
         audio,
         references=references,
-        first_track_number=1 + len(camera_groups),
+        first_track_number=CAMERA_AUDIO_START_TRACK + _camera_audio_track_count(audio_camera_groups),
         fps=fps,
     )
 
+    _add_import_options(root)
     _write_pretty_xml(root, output_path)
     return output_path
 
@@ -193,6 +196,7 @@ def _collect_valid_clips(
                     clip_data,
                     default=DEFAULT_CAMERA_AUDIO_CHANNELS,
                 ),
+                "has_video": True,
                 "label": "Iris",
                 "in": 0,
                 "out": max(1, _seconds_to_frames(duration_seconds, fps)),
@@ -509,14 +513,16 @@ def _add_media_bin(
 
     for item_index, media_item in enumerate(media_items, start=1):
         masterclip_id = f"{_xml_id_token(id_prefix)}-master-{item_index}"
+        media_file_id = f"{_xml_id_token(id_prefix)}-file-{item_index}"
         media_item["masterclip_id"] = masterclip_id
+        media_item["media_file_id"] = media_file_id
         _add_master_clip(
             bin_children,
             media_item=media_item,
             fps=fps,
             media_kind=media_kind,
             clip_id=masterclip_id,
-            file_id=f"{_xml_id_token(id_prefix)}-file-{item_index}",
+            file_id=media_file_id,
         )
 
 
@@ -537,16 +543,28 @@ def _add_master_clip(
         "end": duration_frames,
         "in": 0,
         "out": duration_frames,
+        "masterclip_id": clip_id,
     }
 
-    clip = ET.SubElement(parent, "clip", id=clip_id)
+    channel_count = _clip_audio_channel_count(source_clip)
+    if media_kind == "video_audio" and channel_count > 1:
+        clip_attrs = {"explodedTracks": "TRUE", "id": clip_id}
+    else:
+        clip_attrs = {"id": clip_id}
+
+    clip = ET.SubElement(parent, "clip", clip_attrs)
     ET.SubElement(clip, "name").text = source_clip["name"]
     ET.SubElement(clip, "duration").text = str(duration_frames)
     _add_rate(clip, fps)
+    ET.SubElement(clip, "masterclipid").text = clip_id
+    ET.SubElement(clip, "ismasterclip").text = "TRUE"
     ET.SubElement(clip, "in").text = "-1"
     ET.SubElement(clip, "out").text = "-1"
 
     media = ET.SubElement(clip, "media")
+    video_item_id = f"{clip_id}-video"
+    audio_item_ids = [f"{clip_id}-audio-{source}" for source in range(1, channel_count + 1)]
+
     if media_kind == "video_audio":
         video = ET.SubElement(media, "video")
         video_track = ET.SubElement(video, "track")
@@ -555,24 +573,29 @@ def _add_master_clip(
             clip=source_clip,
             fps=fps,
             media_type="video",
-            item_id=f"{clip_id}-video",
-            file_id=f"{file_id}-video",
-            source_track_index=1,
-            include_masterclip_id=False,
+            item_id=video_item_id,
+            file_id=file_id,
+            source_track_index=None,
+            master_clip_item=True,
+            links=_master_clip_links(video_item_id, audio_item_ids),
         )
+        _finish_track(video_track)
 
     audio = ET.SubElement(media, "audio")
-    audio_track = ET.SubElement(audio, "track")
-    _add_clipitem(
-        audio_track,
-        clip=source_clip,
-        fps=fps,
-        media_type="audio",
-        item_id=f"{clip_id}-audio",
-        file_id=f"{file_id}-audio",
-        source_track_index=1,
-        include_masterclip_id=False,
-    )
+    for source_track_index, audio_item_id in enumerate(audio_item_ids, start=1):
+        audio_track = ET.SubElement(audio, "track")
+        _add_clipitem(
+            audio_track,
+            clip=source_clip,
+            fps=fps,
+            media_type="audio",
+            item_id=audio_item_id,
+            file_id=file_id,
+            source_track_index=None,
+            master_clip_item=True,
+            links=_master_clip_links(video_item_id if media_kind == "video_audio" else None, audio_item_ids),
+        )
+        _finish_track(audio_track)
 
 
 def _unique_project_item_name(name: str, used_names: set[str]) -> str:
@@ -591,12 +614,106 @@ def _xml_id_token(value: str) -> str:
     return token or "item"
 
 
+
+def _master_clip_links(video_item_id: str | None, audio_item_ids: list[str]) -> list[dict]:
+    links: list[dict] = []
+    if video_item_id:
+        links.append(
+            {
+                "linkclipref": video_item_id,
+                "mediatype": "video",
+                "trackindex": 1,
+                "clipindex": 1,
+                "groupindex": 1,
+            }
+        )
+    for source_track_index, audio_item_id in enumerate(audio_item_ids, start=1):
+        links.append(
+            {
+                "linkclipref": audio_item_id,
+                "mediatype": "audio",
+                "trackindex": source_track_index,
+                "clipindex": 1,
+                "groupindex": 1,
+            }
+        )
+    return links
+
+def _add_sequence_audio_settings(audio_parent: ET.Element) -> None:
+    format_node = ET.SubElement(audio_parent, "format")
+    sample_characteristics = ET.SubElement(format_node, "samplecharacteristics")
+    ET.SubElement(sample_characteristics, "depth").text = "16"
+    ET.SubElement(sample_characteristics, "samplerate").text = "48000"
+
+    outputs = ET.SubElement(audio_parent, "outputs")
+    group = ET.SubElement(outputs, "group")
+    ET.SubElement(group, "index").text = "1"
+    ET.SubElement(group, "numchannels").text = "2"
+    ET.SubElement(group, "downmix").text = "0"
+    for channel_index in (1, 2):
+        channel = ET.SubElement(group, "channel")
+        ET.SubElement(channel, "index").text = str(channel_index)
+
+def _add_import_options(root: ET.Element) -> None:
+    import_options = ET.SubElement(root, "importoptions")
+    ET.SubElement(import_options, "createnewproject").text = "FALSE"
+    ET.SubElement(import_options, "targetprojectname").text = "Synced Project"
+    ET.SubElement(import_options, "defsequencepresetname").text = "useFirstClipSettings"
+    ET.SubElement(import_options, "displaynonfatalerrors").text = "TRUE"
+    ET.SubElement(import_options, "filterreconnectmediafiles").text = "TRUE"
+    ET.SubElement(import_options, "filterincludemarkers").text = "TRUE"
+    ET.SubElement(import_options, "filterincludeeffects").text = "TRUE"
+    ET.SubElement(import_options, "filterincludesequencesettings").text = "FALSE"
+
+
+def _assign_sequence_clip_links(
+    video_camera_groups: OrderedDict[str, list[dict]],
+    audio_camera_groups: OrderedDict[str, list[dict]],
+) -> None:
+    next_group_id = 1
+    for camera_clips in video_camera_groups.values():
+        for clip in camera_clips:
+            if "sequence_group_id" not in clip:
+                clip["sequence_group_id"] = next_group_id
+                next_group_id += 1
+
+    for video_track_index, camera_clips in enumerate(video_camera_groups.values(), start=1):
+        for clip_index, clip in enumerate(camera_clips, start=1):
+            group_id = int(clip["sequence_group_id"])
+            clip["sequence_video_item_id"] = f"video-clip-{group_id}"
+            clip["sequence_video_track_index"] = video_track_index
+            clip["sequence_video_clip_index"] = clip_index
+
+    audio_track_index = CAMERA_AUDIO_START_TRACK
+    for camera_clips in audio_camera_groups.values():
+        group_channel_count = _camera_group_audio_channel_count(camera_clips)
+        for source_track_index in range(1, group_channel_count + 1):
+            audio_clip_index = 0
+            for clip in camera_clips:
+                clip_channel_count = _clip_audio_channel_count(
+                    clip,
+                    default=DEFAULT_CAMERA_AUDIO_CHANNELS,
+                )
+                if source_track_index > clip_channel_count:
+                    continue
+                audio_clip_index += 1
+                group_id = int(clip["sequence_group_id"])
+                clip.setdefault("sequence_audio_item_ids", {})[source_track_index] = (
+                    f"audio-clip-{group_id}-ch{source_track_index}"
+                )
+                clip.setdefault("sequence_audio_track_indexes", {})[source_track_index] = audio_track_index
+                clip.setdefault("sequence_audio_clip_indexes", {})[source_track_index] = audio_clip_index
+            audio_track_index += 1
+
+
+def _clip_media_file_id(clip: dict) -> str:
+    return str(clip.get("media_file_id") or f"file-{_xml_id_token(str(clip.get('path') or clip.get('name') or 'media'))}")
+
 def _add_camera_video_tracks(
     video_parent: ET.Element,
     camera_groups: OrderedDict[str, list[dict]],
     fps: int,
 ) -> None:
-    clip_index = 1
     for camera_number, (camera_name, camera_clips) in enumerate(camera_groups.items(), start=1):
         track = ET.SubElement(video_parent, "track")
         ET.SubElement(track, "name").text = f"V{camera_number} - {camera_name}"
@@ -606,11 +723,11 @@ def _add_camera_video_tracks(
                 clip=clip,
                 fps=fps,
                 media_type="video",
-                item_id=f"video-clip-{clip_index}",
-                file_id=f"file-video-{clip_index}",
+                item_id=str(clip["sequence_video_item_id"]),
+                file_id=_clip_media_file_id(clip),
                 source_track_index=1,
+                links=_sequence_clip_links(clip, _clip_audio_channel_count(clip)),
             )
-            clip_index += 1
         _finish_track(track)
 
 
@@ -695,28 +812,119 @@ def _references_grouped_by_track(references: list[dict]) -> OrderedDict[str, lis
     return grouped
 
 
+def _camera_audio_track_count(camera_groups: OrderedDict[str, list[dict]]) -> int:
+    return sum(_camera_group_audio_channel_count(camera_clips) for camera_clips in camera_groups.values())
+
+
+def _camera_group_audio_channel_count(camera_clips: list[dict]) -> int:
+    if not camera_clips:
+        return DEFAULT_CAMERA_AUDIO_CHANNELS
+    return max(
+        1,
+        max(
+            _clip_audio_channel_count(clip, default=DEFAULT_CAMERA_AUDIO_CHANNELS)
+            for clip in camera_clips
+        ),
+    )
+
+def _audio_channel_track_suffix(source_track_index: int, channel_count: int) -> str:
+    if channel_count <= 1:
+        return ""
+    if source_track_index == 1:
+        return " E"
+    if source_track_index == 2:
+        return " D"
+    return f" Ch {source_track_index}"
+
+
+
+def _camera_audio_track_attributes(source_track_index: int, channel_count: int) -> dict[str, str]:
+    if channel_count == 2:
+        return {
+            "TL.SQTrackExpanded": "0",
+            "currentExplodedTrackIndex": str(source_track_index - 1),
+            "premiereTrackType": "Stereo",
+            "totalExplodedTrackCount": "2",
+        }
+    return {}
+
+
 def _add_camera_audio_tracks(
     audio_parent: ET.Element,
     camera_groups: OrderedDict[str, list[dict]],
     fps: int,
 ) -> None:
-    clip_index = 1
-    for camera_number, (camera_name, camera_clips) in enumerate(camera_groups.items(), start=1):
-        track = ET.SubElement(audio_parent, "track")
-        audio_track_number = CAMERA_AUDIO_START_TRACK + camera_number - 1
-        ET.SubElement(track, "name").text = f"A{audio_track_number} - {camera_name}"
-        for clip in camera_clips:
-            _add_clipitem(
-                track,
-                clip=clip,
-                fps=fps,
-                media_type="audio",
-                item_id=f"audio-clip-{clip_index}",
-                file_id=f"file-audio-{clip_index}",
-                source_track_index=1,
+    audio_track_number = CAMERA_AUDIO_START_TRACK
+    for camera_name, camera_clips in camera_groups.items():
+        group_channel_count = _camera_group_audio_channel_count(camera_clips)
+        for source_track_index in range(1, group_channel_count + 1):
+            track = ET.SubElement(
+                audio_parent,
+                "track",
+                _camera_audio_track_attributes(source_track_index, group_channel_count),
             )
-            clip_index += 1
-        _finish_track(track)
+            suffix = _audio_channel_track_suffix(source_track_index, group_channel_count)
+            ET.SubElement(track, "name").text = f"A{audio_track_number} - {camera_name}{suffix}"
+            for clip in camera_clips:
+                clip_channel_count = _clip_audio_channel_count(
+                    clip,
+                    default=DEFAULT_CAMERA_AUDIO_CHANNELS,
+                )
+                if source_track_index > clip_channel_count:
+                    continue
+                item_id = clip.get("sequence_audio_item_ids", {}).get(source_track_index)
+                if not item_id:
+                    continue
+                _add_clipitem(
+                    track,
+                    clip=clip,
+                    fps=fps,
+                    media_type="audio",
+                    item_id=str(item_id),
+                    file_id=_clip_media_file_id(clip),
+                    source_track_index=source_track_index,
+                    links=_sequence_clip_links(clip, group_channel_count),
+                )
+            _finish_track(track)
+            audio_track_number += 1
+
+
+def _sequence_clip_links(clip: dict, channel_count: int) -> list[dict] | None:
+    links: list[dict] = []
+    video_item_id = clip.get("sequence_video_item_id")
+    if video_item_id:
+        links.append(
+            {
+                "linkclipref": video_item_id,
+                "mediatype": "video",
+                "trackindex": clip.get("sequence_video_track_index", 1),
+                "clipindex": clip.get("sequence_video_clip_index", 1),
+                "groupindex": 1,
+            }
+        )
+
+    audio_item_ids = clip.get("sequence_audio_item_ids") or {}
+    audio_track_indexes = clip.get("sequence_audio_track_indexes") or {}
+    audio_clip_indexes = clip.get("sequence_audio_clip_indexes") or {}
+    stereo_sources = [source for source in (1, 2) if source in audio_item_ids and source <= channel_count]
+    for source_track_index in sorted(audio_item_ids):
+        if source_track_index > channel_count:
+            continue
+        link = {
+            "linkclipref": audio_item_ids[source_track_index],
+            "mediatype": "audio",
+            "trackindex": audio_track_indexes.get(source_track_index, source_track_index),
+            "clipindex": audio_clip_indexes.get(source_track_index, 1),
+        }
+        if source_track_index in stereo_sources and len(stereo_sources) >= 2:
+            link["groupindex"] = 1
+        links.append(link)
+
+    return links or None
+
+
+def _premiere_channel_type_for_sequence_clip(clip: dict) -> str:
+    return "stereo" if _clip_audio_channel_count(clip) >= 2 else "mono"
 
 
 def _add_clipitem(
@@ -727,10 +935,29 @@ def _add_clipitem(
     media_type: str,
     item_id: str,
     file_id: str,
-    source_track_index: int,
+    source_track_index: int | None,
     include_masterclip_id: bool = True,
+    links: list[dict] | None = None,
+    file_reference_only: bool = False,
+    master_clip_item: bool = False,
 ) -> ET.Element:
-    clipitem = ET.SubElement(parent, "clipitem", id=item_id)
+    clipitem_attrs = {"id": item_id}
+    if not master_clip_item:
+        clipitem_attrs["premiereChannelType"] = _premiere_channel_type_for_sequence_clip(clip)
+    clipitem = ET.SubElement(parent, "clipitem", clipitem_attrs)
+    if master_clip_item:
+        if clip.get("masterclip_id"):
+            ET.SubElement(clipitem, "masterclipid").text = str(clip["masterclip_id"])
+        file_element = ET.SubElement(clipitem, "file", id=file_id)
+        ET.SubElement(file_element, "name").text = clip["name"]
+        _add_rate(file_element, fps)
+        ET.SubElement(file_element, "duration").text = str(clip["duration_frames"])
+        _add_file_media(file_element, clip, media_type)
+        ET.SubElement(file_element, "pathurl").text = _path_to_file_url(clip["path"])
+        if links:
+            _add_clipitem_links(clipitem, links)
+        return clipitem
+
     ET.SubElement(clipitem, "name").text = clip["name"]
     if include_masterclip_id and clip.get("masterclip_id"):
         ET.SubElement(clipitem, "masterclipid").text = str(clip["masterclip_id"])
@@ -743,20 +970,70 @@ def _add_clipitem(
     _add_labels(clipitem, clip.get("label"))
 
     file_element = ET.SubElement(clipitem, "file", id=file_id)
-    ET.SubElement(file_element, "name").text = clip["name"]
-    ET.SubElement(file_element, "pathurl").text = _path_to_file_url(clip["path"])
-    _add_rate(file_element, fps)
-    ET.SubElement(file_element, "duration").text = str(clip["duration_frames"])
+    if not file_reference_only:
+        ET.SubElement(file_element, "name").text = clip["name"]
+        _add_rate(file_element, fps)
+        ET.SubElement(file_element, "duration").text = str(clip["duration_frames"])
+        _add_file_media(file_element, clip, media_type)
+        ET.SubElement(file_element, "pathurl").text = _path_to_file_url(clip["path"])
 
+    if source_track_index is not None:
+        source_track = ET.SubElement(clipitem, "sourcetrack")
+        ET.SubElement(source_track, "mediatype").text = media_type
+        ET.SubElement(source_track, "trackindex").text = str(source_track_index)
+    if links:
+        _add_clipitem_links(clipitem, links)
+    return clipitem
+
+
+
+def _add_file_media(file_element: ET.Element, clip: dict, media_type: str) -> None:
     media = ET.SubElement(file_element, "media")
+    if clip.get("has_video"):
+        ET.SubElement(media, "video")
+        audio_node = ET.SubElement(media, "audio")
+        _add_audio_channel_layout(audio_node, _clip_audio_channel_count(clip))
+        return
+
     media_node = ET.SubElement(media, media_type)
     if media_type == "audio":
-        ET.SubElement(media_node, "channelcount").text = str(_clip_audio_channel_count(clip))
+        _add_audio_channel_layout(media_node, _clip_audio_channel_count(clip))
 
-    source_track = ET.SubElement(clipitem, "sourcetrack")
-    ET.SubElement(source_track, "mediatype").text = media_type
-    ET.SubElement(source_track, "trackindex").text = str(source_track_index)
-    return clipitem
+def _add_clipitem_links(parent: ET.Element, links: list[dict]) -> None:
+    for link_info in links:
+        link = ET.SubElement(parent, "link")
+        ET.SubElement(link, "mediatype").text = str(link_info.get("mediatype") or "audio")
+        ET.SubElement(link, "trackindex").text = str(link_info.get("trackindex") or 1)
+        ET.SubElement(link, "clipindex").text = str(link_info.get("clipindex") or 1)
+        group_index = link_info.get("groupindex")
+        if group_index is not None:
+            ET.SubElement(link, "groupindex").text = str(group_index)
+        link_ref = link_info.get("linkclipref")
+        if link_ref:
+            ET.SubElement(link, "linkclipref").text = str(link_ref)
+
+def _add_audio_channel_layout(audio_node: ET.Element, channel_count: int) -> None:
+    ET.SubElement(audio_node, "channelcount").text = str(channel_count)
+    sample_characteristics = ET.SubElement(audio_node, "samplecharacteristics")
+    ET.SubElement(sample_characteristics, "depth").text = "16"
+    ET.SubElement(sample_characteristics, "samplerate").text = "48000"
+
+    if channel_count == 1:
+        ET.SubElement(audio_node, "layout").text = "mono"
+        audio_channel = ET.SubElement(audio_node, "audiochannel")
+        ET.SubElement(audio_channel, "sourcechannel").text = "1"
+        return
+
+    if channel_count == 2:
+        ET.SubElement(audio_node, "layout").text = "stereo"
+        audio_channel = ET.SubElement(audio_node, "audiochannel")
+        ET.SubElement(audio_channel, "sourcechannel").text = "1"
+        return
+
+    ET.SubElement(audio_node, "layout").text = "stereo"
+    for source_channel in range(1, channel_count + 1):
+        audio_channel = ET.SubElement(audio_node, "audiochannel")
+        ET.SubElement(audio_channel, "sourcechannel").text = str(source_channel)
 
 
 def _add_labels(parent: ET.Element, label: str | None) -> None:
@@ -1005,9 +1282,11 @@ def _add_timecode(parent: ET.Element, fps: int) -> ET.Element:
     return timecode
 
 
-def _finish_track(track: ET.Element) -> None:
+def _finish_track(track: ET.Element, *, output_channel_index: int | None = None) -> None:
     ET.SubElement(track, "enabled").text = "TRUE"
     ET.SubElement(track, "locked").text = "FALSE"
+    if output_channel_index is not None:
+        ET.SubElement(track, "outputchannelindex").text = str(output_channel_index)
 
 
 def _seconds_to_frames(seconds: float | int | str, fps: int) -> int:

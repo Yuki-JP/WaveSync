@@ -26,7 +26,7 @@ TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 TELEGRAM_MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_PACKAGE_BYTES = 45 * 1024 * 1024
 DEFAULT_MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024
-DIAGNOSTIC_EXTENSIONS = {".csv", ".json", ".log", ".xml"}
+DIAGNOSTIC_EXTENSIONS = {".csv", ".json", ".log", ".txt", ".xml"}
 LAST_SYNC_SUFFIXES = (".xml", "_audit.csv", "_audit.json")
 
 

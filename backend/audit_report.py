@@ -580,10 +580,14 @@ def classify_sync_quality(row: dict, coverage: dict) -> tuple[str, list[str]]:
                 f"{coverage_seconds:.3f}s/{coverage_ratio:.3f}"
             )
 
+    large_unconfirmed_model_delta = (
+        "native" in sync_method
+        or sync_method in {"camera_clock_model", "camera_block_weak_individual_near_prediction"}
+    )
     if (
         final_vs_individual is not None
         and abs(final_vs_individual) > SYNC_QUALITY_LARGE_DSP_DELTA_SECONDS
-        and "native" in sync_method
+        and large_unconfirmed_model_delta
         and not local_or_peer_confirmed
     ):
         if (
@@ -793,12 +797,21 @@ def log_camera_track_check(track_check: dict) -> None:
         logger.info("TRACK CHECK OK: nenhuma sobreposicao real detectada por camera.")
 
 
+
+def format_audio_layout_report(report: dict) -> str:
+    if not report:
+        return "n/a"
+    status = report.get("status", "n/a")
+    issue_count = int(report.get("issue_count") or 0)
+    path = report.get("json") or report.get("csv") or report.get("txt") or report.get("error") or "n/a"
+    return f"{status} ({issue_count}) | {path}"
 def build_summary(sync_results: dict, output_xml_path: Path) -> str:
     offsets = sync_results.get("offsets") or {}
     metadata = sync_results.get("metadata") or {}
     successful = {path: offset for path, offset in offsets.items() if offset is not None}
     failed = [path for path, offset in offsets.items() if offset is None]
     audit_reports = metadata.get("audit_reports") or {}
+    audio_layout_report = metadata.get("audio_layout_report") or {}
     track_check = metadata.get("track_check") or {}
     sync_quality = metadata.get("sync_quality") or {}
     sync_quality_status = sync_quality.get("overall_status", "n/a")
@@ -836,6 +849,7 @@ def build_summary(sync_results: dict, output_xml_path: Path) -> str:
         f"TrackCheck : {'OK' if track_overlap_count == 0 else f'{track_overlap_count} overlap(s)'}",
         f"SyncCheck  : {sync_quality_status}",
         f"SyncGuard  : {'BLOQUEIO' if sync_guard_count else 'OK'}",
+        f"AudioLayout: {format_audio_layout_report(audio_layout_report)}",
         f"Cache DSP  : refs {reference_cache_hits}/{reference_count} | targets {target_cache_hits}/{success_count}",
         f"Cache Auto : {cache_auto_summary}",
         f"XML        : {output_xml_path}",
